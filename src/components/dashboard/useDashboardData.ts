@@ -29,11 +29,20 @@ export type AiState =
 interface Keyed<T> {
   readonly key: string;
   readonly value: T;
+  /** When the browser received it (epoch ms): lets the page show how old the data is NOW, not when it arrived. */
+  readonly at: number;
 }
+
+/** How often the page checks whether the data has outlived its cache window. */
+export const AUTO_REFRESH_CHECK_MS = 30_000;
+/** After a silent refresh, wait at least this long before another, however old the data looks. */
+export const AUTO_REFRESH_MIN_GAP_MS = 5 * 60_000;
 
 export interface DashboardData {
   /** `null` while loading. */
   readonly air: AirOutcome | null;
+  /** When `air` reached the browser (epoch ms), or null while loading. */
+  readonly airReceivedAt: number | null;
   /** `null` while loading. */
   readonly recommendations: RecommendOutcome | null;
   readonly ai: AiState;
@@ -57,7 +66,7 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
     const controller = new AbortController();
     fetchAir(cityId, controller.signal)
       .then((value) => {
-        if (!controller.signal.aborted) setAirResult({ key: airKey, value });
+        if (!controller.signal.aborted) setAirResult({ key: airKey, value, at: Date.now() });
       })
       .catch(() => undefined); // aborted by a newer selection: nothing to show
     return () => controller.abort();
@@ -67,7 +76,7 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
     const controller = new AbortController();
     fetchRecommendations(cityId, profileId, false, controller.signal)
       .then((value) => {
-        if (!controller.signal.aborted) setRecResult({ key: recKey, value });
+        if (!controller.signal.aborted) setRecResult({ key: recKey, value, at: Date.now() });
       })
       .catch(() => undefined);
     return () => controller.abort();
@@ -81,13 +90,14 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
     const controller = new AbortController();
     aiController.current = controller;
     const key = selectionKey;
-    setAiResult({ key, value: { status: "loading" } });
+    setAiResult({ key, value: { status: "loading" }, at: Date.now() });
     fetchRecommendations(cityId, profileId, true, controller.signal)
       .then((outcome) => {
         if (controller.signal.aborted) return;
         const envelope = outcome.ok ? outcome.data.ai : (outcome.data?.ai ?? null);
         setAiResult({
           key,
+          at: Date.now(),
           value:
             envelope !== null
               ? { status: "done", envelope }
@@ -97,6 +107,50 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
       .catch(() => undefined);
   }, [cityId, profileId, selectionKey]);
 
+  // Keep the page current without a reload: once the data has outlived its cache window, quietly fetch it
+  // again for the SAME selection. The old data stays on screen until the new data arrives, a failed refresh
+  // keeps it, and a refresh that still returns old data cannot repeat sooner than the minimum gap.
+  const airRef = useRef(airResult);
+  useEffect(() => {
+    airRef.current = airResult;
+  });
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    let lastAutoRefresh = 0;
+    const due = (): boolean => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return false;
+      const current = airRef.current;
+      if (current === null || current.key !== airKey || !current.value.ok) return false;
+      const data = current.value.data;
+      const age = (data.ageSeconds ?? 0) + (Date.now() - current.at) / 1000;
+      return age >= data.cache.ttlSeconds && Date.now() - lastAutoRefresh >= AUTO_REFRESH_MIN_GAP_MS;
+    };
+    const run = () => {
+      if (!due()) return;
+      lastAutoRefresh = Date.now();
+      controller?.abort();
+      const own = new AbortController();
+      controller = own;
+      fetchAir(cityId, own.signal)
+        .then((value) => {
+          if (!own.signal.aborted && value.ok) setAirResult({ key: airKey, value, at: Date.now() });
+        })
+        .catch(() => undefined);
+      fetchRecommendations(cityId, profileId, false, own.signal)
+        .then((value) => {
+          if (!own.signal.aborted && value.ok) setRecResult({ key: recKey, value, at: Date.now() });
+        })
+        .catch(() => undefined);
+    };
+    const timer = setInterval(run, AUTO_REFRESH_CHECK_MS);
+    document.addEventListener("visibilitychange", run);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", run);
+      controller?.abort();
+    };
+  }, [cityId, profileId, airKey, recKey]);
+
   const refresh = useCallback(() => {
     setAirNonce((n) => n + 1);
     setRecNonce((n) => n + 1);
@@ -104,6 +158,7 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
 
   return {
     air: airResult !== null && airResult.key === airKey ? airResult.value : null,
+    airReceivedAt: airResult !== null && airResult.key === airKey ? airResult.at : null,
     recommendations: recResult !== null && recResult.key === recKey ? recResult.value : null,
     ai: aiResult !== null && aiResult.key === selectionKey ? aiResult.value : { status: "idle" },
     refresh,

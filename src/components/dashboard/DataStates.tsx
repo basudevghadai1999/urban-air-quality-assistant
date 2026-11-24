@@ -32,12 +32,13 @@ export function ErrorPanel({ title, failure, onRetry }: { title: string; failure
 }
 
 /** Titled section container used by every dashboard panel. */
-export function Section({ id, title, children, aside }: { id: string; title: string; children: ReactNode; aside?: ReactNode }) {
+export function Section({ id, title, children, aside, highlight = false }: { id: string; title: string; children: ReactNode; aside?: ReactNode; highlight?: boolean }) {
   return (
     <section aria-labelledby={`${id}-heading`} className="min-w-0">
-      <Card className="h-full space-y-4">
+      <Card className={highlight ? "h-full space-y-4 border-brand bg-linear-to-br from-info-bg via-surface to-surface p-6 sm:p-7" : "h-full space-y-4 p-5 sm:p-6"}>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id={`${id}-heading`} className="text-xl font-semibold">
+          <h2 id={`${id}-heading`} className="flex items-center gap-3 text-xl font-semibold">
+            <span aria-hidden="true" className="h-6 w-1.5 shrink-0 rounded-full bg-brand" />
             {title}
           </h2>
           {aside}

@@ -12,8 +12,9 @@ import { MemoryProviderBudget, RedisProviderBudget, type ProviderBudget } from "
 import { createAiCache } from "./cache";
 import { createGeminiTransport } from "./client";
 import { createGroqTransport } from "./groqClient";
-import type { ProviderTransport } from "./provider";
+import type { ProviderTarget, ProviderTransport } from "./provider";
 import { resolveAiConfig } from "./config";
+import { createChatService, type ChatService } from "./chatService";
 import { createExplanationService, type ExplanationService } from "./service";
 
 /**
@@ -36,9 +37,21 @@ const pausedBudget: ProviderBudget = {
   reserve: () => Promise.reject(new Error("AI protection is unavailable: Redis is not configured in production")),
 };
 
-export function getAiExplanationService(): ExplanationService {
+interface Wiring {
+  readonly settings: AiSettings;
+  readonly infra: ReturnType<typeof getSharedInfrastructure>;
+  readonly clientGate: RateLimitGate;
+  readonly budget: ProviderBudget;
+  readonly getTransport: (provider: ProviderTarget) => ProviderTransport;
+}
+
+const WIRING_KEY = Symbol.for("urban-air-intelligence.ai-wiring");
+const CHAT_KEY = Symbol.for("urban-air-intelligence.chat-service");
+
+/** The limiter, budgets and provider clients, built once and shared by the explanation and chat services. */
+function getWiring(): Wiring {
   const store = globalThis as unknown as Store;
-  const existing = store[SERVICE_KEY] as ExplanationService | undefined;
+  const existing = store[WIRING_KEY] as Wiring | undefined;
   if (existing !== undefined) return existing;
 
   const infra = getSharedInfrastructure();
@@ -86,15 +99,28 @@ export function getAiExplanationService(): ExplanationService {
 
   // One SDK/HTTP client per provider, rebuilt only if that provider's key changes.
   const transports = new Map<string, { apiKey: string; instance: ProviderTransport }>();
+  const getTransport = (provider: ProviderTarget): ProviderTransport => {
+    const known = transports.get(provider.id);
+    if (known !== undefined && known.apiKey === provider.apiKey) return known.instance;
+    const instance = provider.id === "gemini" ? createGeminiTransport(provider.apiKey) : createGroqTransport(provider.apiKey);
+    transports.set(provider.id, { apiKey: provider.apiKey, instance });
+    return instance;
+  };
+
+  const wiring: Wiring = { settings, infra, clientGate, budget, getTransport };
+  store[WIRING_KEY] = wiring;
+  return wiring;
+}
+
+export function getAiExplanationService(): ExplanationService {
+  const store = globalThis as unknown as Store;
+  const existing = store[SERVICE_KEY] as ExplanationService | undefined;
+  if (existing !== undefined) return existing;
+
+  const { settings, infra, clientGate, budget, getTransport } = getWiring();
   const service = createExplanationService({
     getConfig: () => resolveAiConfig(),
-    getTransport: (provider) => {
-      const existing = transports.get(provider.id);
-      if (existing !== undefined && existing.apiKey === provider.apiKey) return existing.instance;
-      const instance = provider.id === "gemini" ? createGeminiTransport(provider.apiKey) : createGroqTransport(provider.apiKey);
-      transports.set(provider.id, { apiKey: provider.apiKey, instance });
-      return instance;
-    },
+    getTransport,
     cache: createAiCache({ ttlSeconds: settings.cacheTtlSeconds, client: infra.client, logger: consoleSafeLogger, metrics: infra.metrics }),
     budget,
     clientGate,
@@ -102,5 +128,24 @@ export function getAiExplanationService(): ExplanationService {
     logger: consoleSafeLogger,
   });
   store[SERVICE_KEY] = service;
+  return service;
+}
+
+/** The chat assistant. It shares the explanation layer's per-client limit and daily budgets. */
+export function getChatService(): ChatService {
+  const store = globalThis as unknown as Store;
+  const existing = store[CHAT_KEY] as ChatService | undefined;
+  if (existing !== undefined) return existing;
+
+  const { infra, clientGate, budget, getTransport } = getWiring();
+  const service = createChatService({
+    getConfig: () => resolveAiConfig(),
+    getTransport,
+    budget,
+    clientGate,
+    metrics: infra.metrics,
+    logger: consoleSafeLogger,
+  });
+  store[CHAT_KEY] = service;
   return service;
 }

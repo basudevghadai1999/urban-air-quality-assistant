@@ -14,7 +14,7 @@ import { FETCHED_AT_MS, jsonResponse, makeOpenMeteoResponse } from "../fixtures/
  * host fails the test, so nothing here can touch a live service or consume quota.
  */
 
-const SYMBOLS = ["air-service", "air-rate-limit-gate", "air-infrastructure", "ai-service"].map((n) => Symbol.for(`urban-air-intelligence.${n}`));
+const SYMBOLS = ["air-service", "air-rate-limit-gate", "air-infrastructure", "ai-service", "ai-wiring", "chat-service"].map((n) => Symbol.for(`urban-air-intelligence.${n}`));
 const KEY = "FAKE-wiring-gemini-key-0123456789";
 const REDIS_URL = "http://127.0.0.1:8079";
 const REDIS_TOKEN = "FAKE-wiring-redis-token-0123456789";

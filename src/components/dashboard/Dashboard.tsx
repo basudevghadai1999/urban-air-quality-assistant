@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react";
 
+import { ChatAssistant } from "@/components/chat/ChatAssistant";
 import { StatusBanner } from "@/components/ui/StatusBanner";
-import type { CityId } from "@/config/cities";
+import { getCityById, type CityId } from "@/config/cities";
+import { listProfileOptions } from "@/config/profiles";
 import type { ProfileId } from "@/lib/engine/types";
 import type { RecommendationResult } from "@/lib/engine";
 
@@ -21,18 +23,20 @@ import { buildRecommendationCards } from "./recommendationView";
 import { formatAge } from "./format";
 import { useDashboardData } from "./useDashboardData";
 
-export const DEFAULT_CITY: CityId = "delhi-ncr";
+export const DEFAULT_CITY: CityId = "bengaluru";
 export const DEFAULT_PROFILE: ProfileId = "family_toddlers";
 
-/** The dashboard: selectors on top, then air quality, outdoor windows, recommendations, impact and the AI explanation. */
+/** The dashboard: selectors on top, then the plain-language explanation, air quality, outdoor windows, recommendations and impact, with a floating question-and-answer assistant. */
 export function Dashboard() {
   const [cityId, setCityId] = useState<CityId>(DEFAULT_CITY);
   const [profileId, setProfileId] = useState<ProfileId>(DEFAULT_PROFILE);
-  const { air, recommendations, ai, refresh, explain } = useDashboardData(cityId, profileId);
+  const { air, airReceivedAt, recommendations, ai, refresh, explain } = useDashboardData(cityId, profileId);
 
   const airData = airDataOf(air);
   const result: RecommendationResult | null = recommendations === null ? null : (recommendations.data?.result ?? null);
   const cards = useMemo(() => (result === null || result.status !== "ok" ? [] : buildRecommendationCards(result)), [result]);
+
+  const contextLabel = `${getCityById(cityId)?.displayName ?? cityId} · ${listProfileOptions().find((o) => o.id === profileId)?.label ?? profileId}`;
 
   const airLoading = air === null;
   const recLoading = recommendations === null;
@@ -41,7 +45,7 @@ export function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <ControlsHeader cityId={cityId} onCityChange={setCityId} air={air} />
+      <ControlsHeader cityId={cityId} onCityChange={setCityId} air={air} airReceivedAt={airReceivedAt} />
       <ProfileSelector profileId={profileId} onProfileChange={setProfileId} />
 
       {stale ? (
@@ -54,6 +58,8 @@ export function Dashboard() {
         <ErrorPanel title="Recommendations could not be loaded" failure={recommendations.failure} onRetry={refresh} />
       ) : null}
 
+      <AiExplanationPanel state={ai} canExplain={!recLoading} onExplain={explain} cards={cards} />
+
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <AirOverview air={airData} loading={airLoading} />
         <OutdoorWindows result={result} loading={recLoading} />
@@ -61,12 +67,11 @@ export function Dashboard() {
 
       <Recommendations key={`${cityId}|${profileId}`} result={result} loading={recLoading} />
 
-      <div className="grid items-start gap-6 lg:grid-cols-2">
-        <ImpactEstimates result={result} loading={recLoading} />
-        <AiExplanationPanel state={ai} canExplain={!recLoading} onExplain={explain} cards={cards} />
-      </div>
+      <ImpactEstimates result={result} loading={recLoading} />
 
       <Attribution air={airData} />
+
+      <ChatAssistant cityId={cityId} profileId={profileId} contextLabel={contextLabel} ready={!recLoading} />
     </div>
   );
 }

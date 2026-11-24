@@ -20,6 +20,7 @@ import { INDIA_TIMEZONE } from "@/lib/constants";
  *   Bengaluru          Wikidata Q1355     12.97912 N 77.59130 E   GeoNames 1277333
  *   Lucknow            Wikidata Q47916    26.84700 N 80.94700 E   GeoNames 1264733
  *   Patna              Wikidata Q80484    25.61000 N 85.14139 E   GeoNames 1260086
+ *   Bhubaneswar        Wikidata Q171771   20.29500 N 85.82500 E   GeoNames 1275817 (20.27241 N 85.83385 E, 2.7 km apart)
  *
  * ## Delhi NCR
  * NCR is a multi-city region, not a point. The data for "delhi-ncr" is the
@@ -34,6 +35,7 @@ export const CITY_IDS = [
   "bengaluru",
   "lucknow",
   "patna",
+  "bhubaneswar",
 ] as const;
 
 export type CityId = (typeof CITY_IDS)[number];
@@ -151,6 +153,18 @@ const CITY_LIST: readonly City[] = [
     timezone: INDIA_TIMEZONE,
     dataLocation: "Patna city-centre model grid cell.",
     coordinateReferences: [wikidata("Q80484", 25.61, 85.1414), geonames("1260086", 25.59408, 85.13563)],
+  },
+  {
+    id: "bhubaneswar",
+    displayName: "Bhubaneswar",
+    state: "Odisha",
+    country: "India",
+    countryCode: "IN",
+    latitude: 20.295,
+    longitude: 85.825,
+    timezone: INDIA_TIMEZONE,
+    dataLocation: "Bhubaneswar city-centre model grid cell.",
+    coordinateReferences: [wikidata("Q171771", 20.295, 85.825), geonames("1275817", 20.27241, 85.83385)],
   },
 ];
 

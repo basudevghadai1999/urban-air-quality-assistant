@@ -12,8 +12,8 @@ const OPTIONS = listProfileOptions();
 export function ProfileSelector({ profileId, onProfileChange }: Props) {
   return (
     <fieldset className="space-y-3">
-      <legend className="text-lg font-semibold">Who is this for?</legend>
-      <p className="text-sm text-ink-muted">Preset profiles. Recommendations use the profile&apos;s typical routine; no personal details are collected.</p>
+      <legend className="text-xl font-semibold">Who is this for?</legend>
+      <p className="text-ink-muted">Preset profiles. Recommendations use the profile&apos;s typical routine; no personal details are collected.</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {OPTIONS.map((option) => {
           const checked = option.id === profileId;

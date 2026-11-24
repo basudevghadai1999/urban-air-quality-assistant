@@ -104,7 +104,7 @@ describe("GET /api/air: invalid input", () => {
   it("rejects an unsupported city with the list of valid IDs", async () => {
     const { service, calls } = liveService();
     const body = await expectError(await run("?cityId=atlantis", service), 400, "INVALID_CITY_ID");
-    expect(body.error.validCityIds).toEqual(["delhi-ncr", "mumbai", "kolkata", "bengaluru", "lucknow", "patna"]);
+    expect(body.error.validCityIds).toEqual(["delhi-ncr", "mumbai", "kolkata", "bengaluru", "lucknow", "patna", "bhubaneswar"]);
     expect(calls).toEqual([]);
   });
 

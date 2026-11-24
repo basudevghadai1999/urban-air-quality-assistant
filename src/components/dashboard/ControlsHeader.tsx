@@ -8,19 +8,21 @@ interface Props {
   cityId: CityId;
   onCityChange: (id: CityId) => void;
   air: AirOutcome | null;
+  /** When `air` reached the browser (epoch ms), so its age can keep counting. */
+  airReceivedAt?: number | null;
 }
 
 const CITIES = getAllCities();
 
 /** Product name, purpose, the city selector and the data-freshness indicator. */
-export function ControlsHeader({ cityId, onCityChange, air }: Props) {
+export function ControlsHeader({ cityId, onCityChange, air, airReceivedAt = null }: Props) {
   const city = CITIES.find((c) => c.id === cityId);
   return (
-    <header className="space-y-5">
-      <div className="space-y-2">
+    <header className="space-y-6 rounded-3xl border border-line bg-linear-to-br from-info-bg via-surface to-surface p-6 sm:p-10">
+      <div className="space-y-3">
         <p className="text-sm font-semibold uppercase tracking-wide text-brand">{APP_NAME}</p>
-        <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">{APP_TAGLINE}</h1>
-        <p className="max-w-prose text-ink-muted">{APP_DESCRIPTION}</p>
+        <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">{APP_TAGLINE}</h1>
+        <p className="max-w-3xl text-lg text-ink-muted">{APP_DESCRIPTION}</p>
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -44,11 +46,11 @@ export function ControlsHeader({ cityId, onCityChange, air }: Props) {
               </option>
             ))}
           </select>
-          <p id="city-note" className="mt-1 text-xs text-ink-muted">
+          <p id="city-note" className="mt-1 text-sm text-ink-muted">
             {city === undefined ? "" : city.id === "delhi-ncr" ? "Data is for central Delhi, not the whole NCR." : `${city.state}. Data is for a model grid cell over the city centre.`}
           </p>
         </div>
-        <FreshnessIndicator air={air} />
+        <FreshnessIndicator air={air} receivedAt={airReceivedAt} />
       </div>
     </header>
   );

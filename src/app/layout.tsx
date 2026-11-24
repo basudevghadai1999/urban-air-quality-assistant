@@ -38,7 +38,7 @@ export default function RootLayout({
           Skip to main content
         </a>
         <SiteHeader />
-        <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-12">
+        <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 pb-28 sm:px-6 sm:py-10 sm:pb-28">
           {children}
         </main>
         <SiteFooter />

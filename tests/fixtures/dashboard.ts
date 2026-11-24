@@ -71,11 +71,13 @@ export interface MockApi {
   readonly calls: RecordedCall[];
   airCalls(): RecordedCall[];
   recommendCalls(explain?: boolean): RecordedCall[];
+  chatCalls(): RecordedCall[];
 }
 
 export interface Handlers {
   air?: (cityId: CityId) => ApiReply | Promise<ApiReply> | "network-error";
   recommend?: (cityId: CityId, profileId: ProfileId, explain: boolean) => ApiReply | Promise<ApiReply> | "network-error";
+  chat?: (body: Record<string, unknown>) => ApiReply | Promise<ApiReply> | "network-error";
 }
 
 export const okAir = (cityId: CityId): ApiReply => ({ status: 200, body: { ok: true, data: airFor(cityId) } });
@@ -85,7 +87,21 @@ export function okRecommend(cityId: CityId, profileId: ProfileId, explain: boole
   return { status: 200, body: { ok: true, data: result, ...(explain ? { ai: envelopeFor(result, "generated-groq") } : {}) } };
 }
 
-/** Replace `fetch` with a router over the two endpoints. Unspecified handlers return healthy responses. */
+/** A synthetic chat reply: written by the tests, never by a model. */
+export const chatEnvelope = (overrides: Record<string, unknown> = {}) => ({
+  status: "generated",
+  answer: "The outdoor activity windows on this page compare times of the day using the modelled forecast.",
+  reasonCode: null,
+  message: "Answer written by Groq from the calculated results.",
+  provider: "groq",
+  model: "openai/gpt-oss-20b",
+  promptVersion: "test",
+  ...overrides,
+});
+
+export const okChat = (): ApiReply => ({ status: 200, body: { ok: true, chat: chatEnvelope() } });
+
+/** Replace `fetch` with a router over the endpoints. Unspecified handlers return healthy responses. */
 export function installApi(handlers: Handlers = {}): MockApi {
   const calls: RecordedCall[] = [];
   vi.stubGlobal(
@@ -99,6 +115,8 @@ export function installApi(handlers: Handlers = {}): MockApi {
       if (url.startsWith("/api/air")) {
         const cityId = new URL(url, "http://localhost").searchParams.get("cityId") as CityId;
         reply = (handlers.air ?? okAir)(cityId);
+      } else if (url.startsWith("/api/chat")) {
+        reply = (handlers.chat ?? okChat)(body ?? {});
       } else {
         const b = body as { cityId: CityId; profileId: ProfileId; explain: boolean };
         reply = (handlers.recommend ?? okRecommend)(b.cityId, b.profileId, b.explain);
@@ -111,6 +129,7 @@ export function installApi(handlers: Handlers = {}): MockApi {
   return {
     calls,
     airCalls: () => calls.filter((c) => c.url.startsWith("/api/air")),
+    chatCalls: () => calls.filter((c) => c.url.startsWith("/api/chat")),
     recommendCalls: (explain) => calls.filter((c) => c.url.startsWith("/api/recommend") && (explain === undefined || c.body?.explain === explain)),
   };
 }

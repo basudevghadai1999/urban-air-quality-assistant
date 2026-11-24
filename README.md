@@ -4,17 +4,11 @@
 
 GenAI-assisted urban air quality guidance for Indian families and communities living with severe winter smog. Built for PromptWars Virtual, Challenge 6.
 
-## Project status: Phase 3C (Gemini and Groq explanations built on the deterministic engine, UI not yet built)
+## Project status
 
-| Done | Not yet built |
-|---|---|
-| Next.js foundation and tooling (2A) | The real dashboard UI (the page is still a labelled placeholder shell) |
-| CPCB Indian AQI engine, `src/lib/aqi` (2B) | Re-checking the final Groq and Gemini prompts live (the one Groq smoke test ran before the last prompt tuning; Gemini returned 503s) |
-| Open-Meteo integration: `GET /api/air` with caching and last-known-good fallback (2C) | Real-Redis verification of the atomic budget script |
-| Persistent (Upstash Redis) cache, per-client rate limiting, safe metrics, verified provider terms (2D) | The evaluator dashboard UI |
-| Deterministic recommendation engine and `POST /api/recommend` (3A); optional validated Gemini explanations with fallback, per-client limit, daily budget and cache (3B); Groq as secondary provider, unit-aware validation, compact context and per-provider budgets (3C) | **Deployment itself**: nothing has been deployed or run against a real Redis yet (see "Verify the deployment") |
+Built and verified: the CPCB Indian AQI engine, Open-Meteo integration with caching and last-known-good fallback, Upstash Redis cache, rate limiting and AI budgets (verified against a real database), the deterministic recommendation engine, validated Gemini and Groq explanations with a deterministic fallback, the dashboard (seven cities, four profiles), a question-and-answer chat assistant, and a Render Free blueprint. Not yet done: a real Render deployment, and a live re-check of the final Gemini prompts (Gemini has never been run live).
 
-The placeholder page shows no readings. Live data is available through `GET /api/air`, and deterministic guidance through `POST /api/recommend`.
+Open the app and pick a city and a profile. The page shows the plain-language explanation (generated on click), the air quality overview, outdoor windows, recommendations and impact estimates. The floating **Ask a question** button opens the chat assistant.
 
 ## Technology stack
 
@@ -189,8 +183,9 @@ The mapper verifies each series' reported unit against `hourly_units`. A series 
 | `bengaluru` | Bengaluru | 12.9791 N, 77.5913 E (Q1355) | 1277333, 0.8 km |
 | `lucknow` | Lucknow | 26.8470 N, 80.9470 E (Q47916) | 1264733, 2.5 km |
 | `patna` | Patna | 25.6100 N, 85.1414 E (Q80484) | 1260086, 1.9 km |
+| `bhubaneswar` | Bhubaneswar (Odisha) | 20.2950 N, 85.8250 E (Q171771) | 1275817, 2.7 km |
 
-All six use `Asia/Kolkata` (UTC+05:30, no daylight saving; checked against the runtime's tz database in the tests). The coordinate only selects a model grid cell, which is far coarser than the point: the response reports the cell centre the provider actually used (`coordinates.grid`). **"Delhi NCR" is the grid cell over central Delhi, not the whole region.** Gurugram, Noida, Ghaziabad and Faridabad are not represented, and `dataLocation` says so.
+All seven use `Asia/Kolkata` (UTC+05:30, no daylight saving; checked against the runtime's tz database in the tests). The coordinate only selects a model grid cell, which is far coarser than the point: the response reports the cell centre the provider actually used (`coordinates.grid`). **"Delhi NCR" is the grid cell over central Delhi, not the whole region.** Gurugram, Noida, Ghaziabad and Faridabad are not represented, and `dataLocation` says so.
 
 ### Technical note: four different kinds of "air quality"
 
@@ -422,6 +417,18 @@ POST /api/recommend
 - **Tokens**: the response `ai.tokenUsage` and the `ai_tokens_*` counters carry the provider-reported counts; a provider that reports none is recorded as unreported, never estimated.
 
 Full details: [`docs/AI_PROVIDER_ARCHITECTURE.md`](docs/AI_PROVIDER_ARCHITECTURE.md).
+
+## Chat assistant
+
+A floating assistant lets a user ask a question about the air quality and the suggestions on the page ("Is it a good time for a walk?"). `POST /api/chat` takes `{ cityId, profileId, message, history? }` and returns `{ ok: true, chat }`, where `chat` is `{ status: generated | fallback | unavailable, answer, reasonCode, message, provider, model, promptVersion, retryAfterSeconds? }`.
+
+- **Same grounding as explanations.** The model receives only the server-built context for the selected city and profile (the same compact projection the explanation uses), never raw readings from the browser. It cannot change any number on the page.
+- **Free text is the only new risk, so it is bounded.** One question of at most 500 characters (whitespace collapsed; control and bidirectional-override characters refused), at most six earlier messages of at most 900 characters, a body of at most 8 KB, strict schema (unknown fields refused). The question and history reach the model only inside labelled untrusted blocks, with anything that imitates a marker removed. Error responses never echo what was submitted.
+- **The answer is validated before it is shown.** It must be `{ "answer": string }` of at most 900 characters and pass the same text rules as explanations: no markup or links, no credential, no invented recommendation ID, no number or time that is not in the context, and none of the medical, health-outcome, guarantee, "safe", indoor-measurement or "official reading" claims. A rejected answer is replaced, never shown.
+- **Fallback.** When AI is off, not configured, rate limited, over budget, slow, failing or rejected, the answer is a short deterministic reply picked from the already-written explanation sections by the question's topic (health questions get the not-medical-advice note). The reply says so and names the reason.
+- **Cost protection is shared with explanations.** Chat uses the same per-client limit (5 per minute), the same atomic daily budgets (`AI_DAILY_BUDGET`, `AI_GEMINI_DAILY_BUDGET`, `AI_GROQ_DAILY_BUDGET`) and the same provider order and failover. It fails closed when Redis cannot decide, and in production without Redis AI is paused. Every question that reaches a provider spends budget, and answers are not cached.
+- **UI.** A floating launcher opens a non-modal dialog (Escape closes it and returns focus to the launcher), with suggested questions, an `aria-live` conversation log, a character counter, Enter to send, and a visible source line on every answer. Text is always rendered as plain text. A conversation belongs to one city and profile: changing either starts a new one, and an answer that arrives late for the old selection is dropped. Nothing is stored.
+- **Not covered.** Questions outside air quality are declined by the prompt and the deterministic reply, not by a separate classifier. The chat has not been run against a live model in tests; all tests use synthetic provider replies.
 
 ## Provider terms and attribution
 

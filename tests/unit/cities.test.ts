@@ -11,8 +11,8 @@ const haversineKm = (a: { latitude: number; longitude: number }, b: { latitude: 
 };
 
 describe("city registry", () => {
-  it("contains exactly the six target cities in a stable order", () => {
-    expect([...CITY_IDS]).toEqual(["delhi-ncr", "mumbai", "kolkata", "bengaluru", "lucknow", "patna"]);
+  it("contains exactly the seven target cities in a stable order", () => {
+    expect([...CITY_IDS]).toEqual(["delhi-ncr", "mumbai", "kolkata", "bengaluru", "lucknow", "patna", "bhubaneswar"]);
     expect(getAllCities().map((c) => c.id)).toEqual([...CITY_IDS]);
   });
 
@@ -56,6 +56,7 @@ describe("city registry", () => {
     near("bengaluru", 12.9716, 77.5946, 5); // Vidhana Soudha area
     near("lucknow", 26.8467, 80.9462, 5);
     near("patna", 25.5941, 85.1376, 8);
+    near("bhubaneswar", 20.2667, 85.8333, 8); // city centre, about 20 deg 16 min N 85 deg 50 min E
   });
 
   it("agrees with both coordinate references to within 3 km", () => {
@@ -66,6 +67,13 @@ describe("city registry", () => {
         expect(reference.url).toMatch(/^https:\/\/www\.(wikidata|geonames)\.org\//);
       }
     }
+  });
+
+  it("includes Bhubaneswar in Odisha with both coordinate references", () => {
+    const city = getCityById("bhubaneswar");
+    expect(city?.displayName).toBe("Bhubaneswar");
+    expect(city?.state).toBe("Odisha");
+    expect(city?.coordinateReferences.map((r) => r.id).sort()).toEqual(["1275817", "Q171771"]);
   });
 
   it("labels Delhi's data as central Delhi, not the whole NCR", () => {

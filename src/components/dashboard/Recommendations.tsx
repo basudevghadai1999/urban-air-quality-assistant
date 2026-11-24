@@ -73,24 +73,24 @@ function List({ result, filter, onFilter, expanded, onExpand }: { result: Recomm
       {matches.length === 0 ? (
         <p className="text-ink-muted">Nothing in this group for the current data.</p>
       ) : (
-        <ol className="space-y-3" aria-label="Recommendations, most important first">
+        <ol className="grid items-start gap-3 lg:grid-cols-2" aria-label="Recommendations, most important first">
           {shown.map((c) => (
-            <li key={c.id} className="rounded-xl border border-line p-4" data-testid="recommendation">
+            <li key={c.id} className="flex flex-col rounded-xl border border-line bg-surface p-4 shadow-sm" data-testid="recommendation">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={TIER[c.tier].tone}>{TIER[c.tier].label}</Badge>
                 <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{KIND_LABEL[c.kind]}</span>
               </div>
               <h3 className="mt-2 text-base font-semibold">{c.title}</h3>
               <p className="mt-1 text-sm"><span className="font-semibold">Why: </span>{c.why}</p>
-              {c.steps.length === 0 ? null : (
+              {c.steps.filter((s) => s !== c.title).length === 0 ? null : (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
-                  {c.steps.map((s, i) => <li key={i}>{s}</li>)}
+                  {c.steps.filter((s) => s !== c.title).map((s, i) => <li key={i}>{s}</li>)}
                 </ul>
               )}
               {c.facts.length === 0 && c.exposureReductionUg === null ? null : (
                 <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
                   {c.facts.map((f) => (
-                    <div key={f.label} className="flex flex-wrap gap-x-2">
+                    <div key={f.label} className={f.value.length > 40 ? "flex flex-wrap gap-x-2 sm:col-span-2" : "flex flex-wrap gap-x-2"}>
                       <dt className="text-ink-muted">{f.label}:</dt>
                       <dd className={f.value.length > 40 ? "" : "font-semibold"}>{f.value}</dd>
                     </div>

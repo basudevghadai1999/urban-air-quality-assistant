@@ -6,7 +6,7 @@
 export const APP_NAME = "Urban Air Intelligence";
 export const APP_TAGLINE = "Breathe Smarter. Live Safer.";
 export const APP_DESCRIPTION =
-  "Live air quality for six Indian cities, turned into clear, personalised guidance for families and communities living with winter smog: daily routines, indoor air and cleaner commutes.";
+  "Live air quality for seven Indian cities, turned into clear, personalised guidance for families and communities living with winter smog: daily routines, indoor air and cleaner commutes.";
 
 /** Current build phase, surfaced in the UI so nobody mistakes placeholders for data. */
 export const DEVELOPMENT_PHASE = "Phase 2A" as const;
@@ -42,7 +42,7 @@ export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b";
 export const GROQ_API_KEY_ENV_KEY = "GROQ_API_KEY";
 export const GROQ_MODEL_ENV_KEY = "GROQ_MODEL";
 
-/** All six target cities share one IANA zone. India observes no daylight saving time. */
+/** All target cities share one IANA zone. India observes no daylight saving time. */
 export const INDIA_TIMEZONE = "Asia/Kolkata" as const;
 /** Asia/Kolkata is a fixed UTC+05:30 (19,800 s); verified against Intl in the test suite. */
 export const IST_UTC_OFFSET_SECONDS = 19_800;

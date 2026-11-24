@@ -23,10 +23,13 @@ export function ImpactEstimates({ result, loading }: { result: RecommendationRes
 function Estimates({ result }: { result: RecommendationResult }) {
   const exposure = result.exposure.items.filter((i) => i.estimate.status === "available" && i.estimate.difference !== null);
   const co2 = result.emissions.rows.filter((r) => r.status === "available" && r.oneWayGramsCo2 !== null);
+  // The same caveat is attached to every exposure estimate: show each distinct one once, not once per item.
+  const caveats = [...new Set(exposure.map((i) => i.estimate.uncertainty).filter((u): u is string => typeof u === "string" && u.trim() !== ""))];
   return (
     <div className="space-y-5">
       <p className="rounded-xl border border-info-ink bg-info-bg p-3 text-sm text-info-ink">Model estimates under stated assumptions, not measurements.</p>
 
+      <div className="grid gap-6 lg:grid-cols-2">
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">PM2.5 you would inhale (µg)</h3>
         {exposure.length === 0 ? (
@@ -44,12 +47,14 @@ function Estimates({ result }: { result: RecommendationResult }) {
                     {d.percentOfBaseline === null ? "" : ` (${formatNumber(d.percentOfBaseline, 0)}% of the baseline)`}.
                     {item.estimate.bestCase ? " This is a best-case ceiling, not an expected value." : ""}
                   </p>
-                  <p className="text-ink-muted">{item.estimate.uncertainty}</p>
                 </li>
               );
             })}
           </ul>
         )}
+        {caveats.map((c) => (
+          <p key={c} className="text-sm text-ink-muted">{c}</p>
+        ))}
       </div>
 
       <div className="space-y-2">
@@ -82,6 +87,7 @@ function Estimates({ result }: { result: RecommendationResult }) {
         <p className="text-sm text-ink-muted">
           Distance {formatNumber(result.emissions.distanceKm)} km one way{result.emissions.distanceIsAssumed ? " (an assumed preset value)" : ""}. {result.emissions.note}
         </p>
+      </div>
       </div>
     </div>
   );

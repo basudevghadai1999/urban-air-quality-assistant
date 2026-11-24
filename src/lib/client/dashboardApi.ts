@@ -1,5 +1,7 @@
 import type { CityId } from "@/config/cities";
+import type { ChatEnvelope, ChatTurn } from "@/lib/ai/chatTypes";
 import type { AiEnvelope } from "@/lib/ai/types";
+import type { ChatApiSuccess } from "@/lib/api/chatHandler";
 import type { RecommendApiError, RecommendApiSuccess } from "@/lib/api/recommendHandler";
 import type { RecommendationResult } from "@/lib/engine";
 import type { ProfileId } from "@/lib/engine/types";
@@ -49,7 +51,7 @@ export const EXPLAIN_TIMEOUT_MS = 50_000;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 const MESSAGES = {
-  network: "We could not reach the server. Check your connection and try again.",
+  network: "We could not reach the server. It may be waking up after a quiet spell, or your connection may be down. Please try again in a moment.",
   "rate-limited": "Too many requests. Please wait a moment before trying again.",
   unavailable: "Air quality data is not available for this city right now, and no earlier reading exists.",
   server: "Something went wrong on our side. Please try again shortly.",
@@ -120,4 +122,36 @@ export async function fetchRecommendations(
   const err = body as unknown as RecommendApiError | null;
   const carried = body !== null && isRecord(body.data) ? { result: err?.data as RecommendationResult, ai: err?.ai ?? null } : null;
   return { ok: false, failure: failureFrom(sent.status, body), data: carried };
+}
+
+export type ChatOutcome =
+  | { readonly ok: true; readonly chat: ChatEnvelope }
+  | { readonly ok: false; readonly failure: ApiFailure };
+
+/** A chat answer may wait on a provider (up to its own timeout) and a second one after it. */
+export const CHAT_TIMEOUT_MS = 50_000;
+
+/**
+ * POST /api/chat. Sends the city and profile IDs, the question, and at most a few earlier messages.
+ * The server builds all context itself; nothing numeric from the browser can influence an answer.
+ */
+export async function fetchChat(
+  cityId: CityId,
+  profileId: ProfileId,
+  message: string,
+  history: readonly ChatTurn[],
+  signal: AbortSignal,
+): Promise<ChatOutcome> {
+  const sent = await send(
+    "/api/chat",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cityId, profileId, message, history }) },
+    signal,
+    CHAT_TIMEOUT_MS,
+  );
+  if (sent.status === null) return { ok: false, failure: failure("network") };
+  const body = sent.body;
+  if (sent.status === 200 && body !== null && body.ok === true && isRecord(body.chat)) {
+    return { ok: true, chat: (body as unknown as ChatApiSuccess).chat };
+  }
+  return { ok: false, failure: failureFrom(sent.status, body) };
 }

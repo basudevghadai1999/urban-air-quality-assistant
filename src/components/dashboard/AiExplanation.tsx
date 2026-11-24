@@ -71,8 +71,10 @@ function Explanation({ env, cards }: { env: AiEnvelope; cards: readonly Recommen
       {e === null ? null : (
         <div className="space-y-4">
           <p className="whitespace-pre-line text-base font-semibold">{e.overview}</p>
-          <Prose title="Today's situation" text={e.situationExplanation} />
-          <Prose title="For this profile" text={e.personalizedSummary} />
+          <div className="grid gap-4 md:grid-cols-2">
+            <Prose title="Today's situation" text={e.situationExplanation} />
+            <Prose title="For this profile" text={e.personalizedSummary} />
+          </div>
           <div>
             <h4 className="text-sm font-semibold">Top actions</h4>
             <ol className="mt-1 list-decimal space-y-2 pl-5 text-sm">
@@ -110,10 +112,10 @@ function Explanation({ env, cards }: { env: AiEnvelope; cards: readonly Recommen
 /** Plain-text AI explanation with its source. Requested on click so browsing never spends model quota. */
 export function AiExplanationPanel({ state, canExplain, onExplain, cards }: { state: AiState; canExplain: boolean; onExplain: () => void; cards: readonly RecommendationCard[] }) {
   return (
-    <Section id="ai" title="Plain-language explanation">
+    <Section id="ai" title="Plain-language explanation" highlight>
       {state.status === "idle" ? (
         <div className="space-y-3">
-          <p className="text-sm text-ink-muted">Ask for a short written explanation of the recommendations above. It is written by an AI model from the engine&apos;s results and checked before it is shown. If no model is available, a standard explanation from built-in rules is shown instead.</p>
+          <p className="max-w-3xl text-ink-muted">Ask for a short written explanation of the recommendations on this page. It is written by an AI model from the engine&apos;s results and checked before it is shown. If no model is available, a standard explanation from built-in rules is shown instead.</p>
           <button type="button" onClick={onExplain} disabled={!canExplain} className="min-h-11 rounded-lg bg-brand px-5 font-semibold text-on-brand disabled:opacity-60">
             Explain with AI
           </button>

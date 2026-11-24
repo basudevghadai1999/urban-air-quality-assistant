@@ -35,9 +35,9 @@ describe("Dashboard: first load", () => {
     await loaded();
     await screen.findAllByTestId("recommendation");
     expect(api.airCalls()).toHaveLength(1);
-    expect(api.airCalls()[0]?.url).toBe("/api/air?cityId=delhi-ncr");
+    expect(api.airCalls()[0]?.url).toBe("/api/air?cityId=bengaluru");
     expect(api.recommendCalls()).toHaveLength(1);
-    expect(api.recommendCalls()[0]?.body).toEqual({ cityId: "delhi-ncr", profileId: "family_toddlers", explain: false });
+    expect(api.recommendCalls()[0]?.body).toEqual({ cityId: "bengaluru", profileId: "family_toddlers", explain: false });
   });
 
   it("shows loading placeholders (aria-busy) before data arrives, and no numbers", () => {
@@ -58,13 +58,37 @@ describe("Dashboard: first load", () => {
   });
 });
 
+describe("Dashboard: layout order", () => {
+  it("puts the plain-language explanation above the air quality overview, and the overview above the recommendations", async () => {
+    installApi();
+    await loaded();
+    const explanation = screen.getByRole("heading", { name: "Plain-language explanation" });
+    const overview = screen.getByRole("heading", { name: "Air quality overview" });
+    const recommendations = screen.getByRole("heading", { name: "Personalised recommendations" });
+    expect(explanation.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(overview.compareDocumentPosition(recommendations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("offers the assistant from a launcher on the page", async () => {
+    installApi();
+    await loaded();
+    expect(screen.getByRole("button", { name: /ask a question/i })).toBeInTheDocument();
+  });
+});
+
 describe("Dashboard: city selection", () => {
-  it("offers the six cities in order", async () => {
+  it("offers the seven cities in order", async () => {
     installApi();
     await loaded();
     const select = screen.getByLabelText("City");
     const names = within(select).getAllByRole("option").map((o) => o.textContent);
-    expect(names).toEqual(["Delhi NCR", "Mumbai", "Kolkata", "Bengaluru", "Lucknow", "Patna"]);
+    expect(names).toEqual(["Delhi NCR", "Mumbai", "Kolkata", "Bengaluru", "Lucknow", "Patna", "Bhubaneswar"]);
+  });
+
+  it("selects Bengaluru by default", async () => {
+    installApi();
+    await loaded();
+    expect(screen.getByLabelText("City")).toHaveValue("bengaluru");
   });
 
   it("loads the new city's air and recommendations once each when changed", async () => {
@@ -72,27 +96,29 @@ describe("Dashboard: city selection", () => {
     await loaded();
     fireEvent.change(screen.getByLabelText("City"), { target: { value: "mumbai" } });
     await waitFor(() => expect(screen.getByText(/Mumbai, Maharashtra/)).toBeInTheDocument());
-    expect(api.airCalls().map((c) => c.url)).toEqual(["/api/air?cityId=delhi-ncr", "/api/air?cityId=mumbai"]);
-    expect(api.recommendCalls().map((c) => c.body?.cityId)).toEqual(["delhi-ncr", "mumbai"]);
+    expect(api.airCalls().map((c) => c.url)).toEqual(["/api/air?cityId=bengaluru", "/api/air?cityId=mumbai"]);
+    expect(api.recommendCalls().map((c) => c.body?.cityId)).toEqual(["bengaluru", "mumbai"]);
   });
 
   it("never shows one city's data under another when responses arrive out of order", async () => {
     const first = deferred<ApiReply>();
     let n = 0;
-    installApi({ air: (cityId) => (cityId === "delhi-ncr" && n++ === 0 ? first.promise : okAir(cityId)) });
+    installApi({ air: (cityId) => (cityId === "bengaluru" && n++ === 0 ? first.promise : okAir(cityId)) });
     render(<Home />);
     fireEvent.change(screen.getByLabelText("City"), { target: { value: "kolkata" } });
     await screen.findByText(/Kolkata, West Bengal/);
-    first.resolve(okAir("delhi-ncr"));
+    first.resolve(okAir("bengaluru"));
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.getByText(/Kolkata, West Bengal/)).toBeInTheDocument();
-    expect(screen.queryByText(/Delhi NCR, Delhi/)).toBeNull();
+    expect(screen.queryByText(/Bengaluru, Karnataka/)).toBeNull();
   });
 
   it("states that Delhi NCR data covers central Delhi only", async () => {
     installApi();
     await loaded();
-    expect(screen.getByText(/central Delhi, not the whole NCR/i)).toBeInTheDocument();
+    expect(screen.queryByText(/central Delhi, not the whole NCR/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText("City"), { target: { value: "delhi-ncr" } });
+    expect(await screen.findByText(/central Delhi, not the whole NCR/i)).toBeInTheDocument();
   });
 });
 
@@ -114,7 +140,7 @@ describe("Dashboard: profile selection", () => {
     await screen.findAllByTestId("recommendation");
     fireEvent.click(screen.getByRole("radio", { name: /senior citizen/i }));
     await waitFor(() => expect(api.recommendCalls()).toHaveLength(2));
-    expect(api.recommendCalls()[1]?.body).toEqual({ cityId: "delhi-ncr", profileId: "senior_respiratory", explain: false });
+    expect(api.recommendCalls()[1]?.body).toEqual({ cityId: "bengaluru", profileId: "senior_respiratory", explain: false });
     expect(api.airCalls()).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /senior citizen/i })).toBeChecked();
   });
@@ -218,7 +244,7 @@ describe("Dashboard: AI explanation", () => {
     fireEvent.click(explainButton());
     const result = await screen.findByTestId("ai-result");
     expect(api.recommendCalls(true)).toHaveLength(1);
-    expect(api.recommendCalls(true)[0]?.body).toEqual({ cityId: "delhi-ncr", profileId: "family_toddlers", explain: true });
+    expect(api.recommendCalls(true)[0]?.body).toEqual({ cityId: "bengaluru", profileId: "family_toddlers", explain: true });
     expect(result).toHaveTextContent("Written by Groq (test-groq-model)");
   });
 

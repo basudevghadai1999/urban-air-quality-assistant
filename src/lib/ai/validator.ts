@@ -316,6 +316,50 @@ function ungroundedNumber(text: string, ctx: NumericContext): RejectionReason | 
   return null;
 }
 
+/* ------------------------------------------------------- per-string checks */
+
+const numericContextOf = (contextJson: string): NumericContext => ({
+  quantities: groundedQuantities(contextJson),
+  times: timesIn(contextJson),
+  allValues: groundedNumbers(contextJson),
+});
+
+const secretsOf = (options: ValidationOptions): string[] => (options.secrets ?? []).filter((s) => s.length >= 8);
+
+/**
+ * Every text-level rule, applied to ONE string: invented IDs, control characters, markup, credentials,
+ * ungrounded numbers and times, and the medical, health-outcome, guarantee, safety, indoor-measurement,
+ * official-reading and missing-pollutant claims. Returns the first rule broken, or null.
+ */
+function checkText(text: string, allowed: ReadonlySet<string>, numeric: NumericContext, secrets: readonly string[]): RejectionReason | null {
+  for (const m of text.matchAll(/\b(?:ROUTINE|INDOOR|TRANSPORT|EXP)_[A-Za-z0-9_-]+/g)) {
+    if (!allowed.has(m[0])) return "invented-id-in-text";
+  }
+  if (CONTROL.test(text)) return "control-characters";
+  if (MARKUP.some((re) => re.test(text))) return "markup-or-link";
+  if (KEY_SHAPE.test(text) || secrets.some((s) => text.includes(s))) return "credential-leak";
+
+  const number = ungroundedNumber(text, numeric);
+  if (number !== null) return number;
+
+  if (DIAGNOSIS.some((re) => hasUnnegatedMatch(text, re))) return "medical-claim";
+  if (HEALTH_OUTCOMES.some((re) => hasUnnegatedMatch(text, re))) return "health-outcome-claim";
+  if (GUARANTEES.some((re) => hasUnnegatedMatch(text, re))) return "guarantee";
+  if (hasUnnegatedMatch(text, SAFETY) || hasUnnegatedMatch(text, HEALTHY_CLAIM)) return "safety-claim";
+  if (INDOOR_MEASURED.some((re) => hasUnnegatedMatch(text, re, true))) return "indoor-measurement-claim";
+  if (hasUnnegatedMatch(text, OFFICIAL_READING, true)) return "official-reading-claim";
+  if (hasUnnegatedMatch(text, MISSING_POLLUTANT, true)) return "missing-pollutant-claim";
+  return null;
+}
+
+/**
+ * The same text rules for free-form prose that is not an explanation (the chat answer). Returns the
+ * rule broken, or null when the text may be shown. Never throws.
+ */
+export function validateAnswerText(text: string, options: ValidationOptions): RejectionReason | null {
+  return checkText(text, new Set(options.allowedIds), numericContextOf(options.contextJson), secretsOf(options));
+}
+
 /* ------------------------------------------------------------------ main */
 
 const reject = (rejection: RejectionReason): ValidationOutcome => ({ ok: false, code: "AI_VALIDATION_REJECTED", rejection });
@@ -349,31 +393,12 @@ export function validateExplanation(candidate: unknown, options: ValidationOptio
   }
 
   const strings = collectStrings(value);
-  const numeric: NumericContext = {
-    quantities: groundedQuantities(options.contextJson),
-    times: timesIn(options.contextJson),
-    allValues: groundedNumbers(options.contextJson),
-  };
-  const secrets = (options.secrets ?? []).filter((s) => s.length >= 8);
+  const numeric = numericContextOf(options.contextJson);
+  const secrets = secretsOf(options);
 
   for (const text of strings) {
-    for (const m of text.matchAll(/\b(?:ROUTINE|INDOOR|TRANSPORT|EXP)_[A-Za-z0-9_-]+/g)) {
-      if (!allowed.has(m[0])) return reject("invented-id-in-text");
-    }
-    if (CONTROL.test(text)) return reject("control-characters");
-    if (MARKUP.some((re) => re.test(text))) return reject("markup-or-link");
-    if (KEY_SHAPE.test(text) || secrets.some((s) => text.includes(s))) return reject("credential-leak");
-
-    const number = ungroundedNumber(text, numeric);
-    if (number !== null) return reject(number);
-
-    if (DIAGNOSIS.some((re) => hasUnnegatedMatch(text, re))) return reject("medical-claim");
-    if (HEALTH_OUTCOMES.some((re) => hasUnnegatedMatch(text, re))) return reject("health-outcome-claim");
-    if (GUARANTEES.some((re) => hasUnnegatedMatch(text, re))) return reject("guarantee");
-    if (hasUnnegatedMatch(text, SAFETY) || hasUnnegatedMatch(text, HEALTHY_CLAIM)) return reject("safety-claim");
-    if (INDOOR_MEASURED.some((re) => hasUnnegatedMatch(text, re, true))) return reject("indoor-measurement-claim");
-    if (hasUnnegatedMatch(text, OFFICIAL_READING, true)) return reject("official-reading-claim");
-    if (hasUnnegatedMatch(text, MISSING_POLLUTANT, true)) return reject("missing-pollutant-claim");
+    const rejection = checkText(text, allowed, numeric, secrets);
+    if (rejection !== null) return reject(rejection);
   }
   return { ok: true, value };
 }
