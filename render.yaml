@@ -1,0 +1,60 @@
+# Render Blueprint for Urban Air Intelligence (Next.js, Node web service on the FREE instance).
+# Not deployed and not connected to any repository. See README, "Deploying on Render".
+#
+# Free-instance facts (https://render.com/docs/free): spins down after 15 minutes without inbound
+# traffic and takes about a minute to wake; 750 free instance hours per workspace per month; 512 MB RAM
+# and 0.1 CPU (https://render.com/docs/blueprint-spec); the filesystem is ephemeral, so this app keeps no
+# state on disk (cache and rate limits live in memory and in Upstash Redis).
+#
+# SECRETS ARE NEVER WRITTEN HERE. Variables with `sync: false` are asked for in the Render Dashboard when
+# the Blueprint is first created, and are ignored on later syncs: set or change them in the Dashboard.
+services:
+  - type: web
+    name: urban-air-intelligence
+    runtime: node
+    plan: free
+    # Closest Render region to India. A region cannot be changed after creation; pick the Upstash
+    # database region nearest to it.
+    region: singapore
+    # package-lock.json is the lockfile, so npm. --include=dev because the build needs TypeScript and
+    # Tailwind (devDependencies) even if the platform sets NODE_ENV=production during the build.
+    # Free instances have 512 MB. Measured locally on a clean build: the default Turbopack build peaked at
+    # about 990 MB, `--webpack` at about 605 MB, and `--webpack` with a 384 MB heap cap at about 539 MB.
+    # Not yet verified on Render itself: if the build is killed for memory, build on a paid instance.
+    buildCommand: npm ci --include=dev && NODE_OPTIONS=--max-old-space-size=384 npx next build --webpack
+    # `next start` listens on $PORT (Render sets 10000) on all interfaces.
+    startCommand: npm start
+    healthCheckPath: /api/health
+    # No repository is connected, and deploys here are deliberate.
+    autoDeployTrigger: "off"
+    envVars:
+      # Node 22, inside package.json "engines" (>=22.22.2 <23). NODE_VERSION wins over engines on Render
+      # (https://render.com/docs/node-version); this is the version the test suite and build were run with.
+      - key: NODE_VERSION
+        value: 22.23.5
+      - key: NODE_ENV
+        value: production
+      # Trust Render's Cloudflare-provided CF-Connecting-IP for per-client rate limiting. Only the
+      # operator can set this, and it must stay unset anywhere that is not behind Render's proxy.
+      - key: TRUST_RENDER_CF_CONNECTING_IP
+        value: "true"
+      # Conservative AI call budget for free provider quotas (attempts per UTC day; a failover from
+      # Gemini to Groq spends one unit of each). Raise only after checking your provider quotas.
+      - key: AI_DAILY_BUDGET
+        value: "100"
+      - key: AI_GEMINI_DAILY_BUDGET
+        value: "60"
+      - key: AI_GROQ_DAILY_BUDGET
+        value: "60"
+      # Secrets: supplied in the Render Dashboard, never committed. Both providers are optional; with
+      # neither key the app serves its deterministic explanation.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Upstash Redis (REST). Required for a durable cache, shared rate limits and AI explanations in
+      # production: without both, air data is memory-only and AI explanations are paused.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

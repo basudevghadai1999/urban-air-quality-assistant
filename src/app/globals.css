@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Every colour is a semantic token resolved with light-dark(), so components
+ * never need `dark:` variants and both themes stay in one place.
+ *
+ * Theme selection:
+ *   - default: follows the OS (`color-scheme: light dark`)
+ *   - override: <html data-theme="light"> or <html data-theme="dark">
+ *     (a future theme toggle only needs to set that attribute)
+ *
+ * Contrast (WCAG 2.2, verified): all text pairs >= 6.5:1 in light and >= 7.6:1
+ * in dark; --line-strong (form-control edges) >= 3.4:1 against every surface.
+ */
+:root {
+  color-scheme: light dark;
+
+  --canvas: light-dark(#f4f8f6, #09130f);
+  --surface: light-dark(#ffffff, #101f1a);
+  --surface-muted: light-dark(#e8f0ed, #172924);
+  --ink: light-dark(#0f2420, #e8f3ef);
+  --ink-muted: light-dark(#3b5650, #a6bdb6);
+  --line: light-dark(#b4c6c0, #3a524b);
+  --line-strong: light-dark(#6a847c, #6f8b83);
+  --brand: light-dark(#0b6558, #5fd3be);
+  --on-brand: light-dark(#ffffff, #04201a);
+  --warn-bg: light-dark(#fff1cc, #33260a);
+  --warn-ink: light-dark(#5c3d00, #f6d98a);
+  --info-bg: light-dark(#e0f0ec, #12302a);
+  --info-ink: light-dark(#0b4f45, #a9e6d9);
+
+  /*
+   * AQI category tokens (CPCB colour order). Each category has a badge background and text colour
+   * (text contrast >= 7.7:1 in both themes) and a solid "bar" colour for the scale meter
+   * (>= 3.3:1 against --surface, the WCAG non-text minimum). Meaning is always also in text.
+   */
+  --aqi-good-bg: light-dark(#d8f3e0, #123824);
+  --aqi-good-ink: light-dark(#0d4a22, #a8efc0);
+  --aqi-good-bar: light-dark(#1f8f4a, #4cc776);
+  --aqi-satisfactory-bg: light-dark(#e6f4c8, #27370d);
+  --aqi-satisfactory-ink: light-dark(#2f4a07, #d3ee9a);
+  --aqi-satisfactory-bar: light-dark(#6f9a10, #9cc83a);
+  --aqi-moderately_polluted-bg: light-dark(#fff1b8, #3b2e08);
+  --aqi-moderately_polluted-ink: light-dark(#5c4300, #f6dc8a);
+  --aqi-moderately_polluted-bar: light-dark(#a87c00, #e0b422);
+  --aqi-poor-bg: light-dark(#ffdcb8, #43250a);
+  --aqi-poor-ink: light-dark(#6b3300, #ffc78f);
+  --aqi-poor-bar: light-dark(#c25e00, #f28c28);
+  --aqi-very_poor-bg: light-dark(#ffd0cc, #46161a);
+  --aqi-very_poor-ink: light-dark(#7a1410, #ffb3ae);
+  --aqi-very_poor-bar: light-dark(#c42b23, #f2655c);
+  --aqi-severe-bg: light-dark(#f1c5dc, #44112e);
+  --aqi-severe-ink: light-dark(#5a0f3a, #f6b7d6);
+  --aqi-severe-bar: light-dark(#8b1d5c, #d869a8);
+
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+  /* Effectively-instant motion for prefers-reduced-motion users. */
+  --motion-instant: 0.01ms;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
+  --color-on-brand: var(--on-brand);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-ink: var(--warn-ink);
+  --color-info-bg: var(--info-bg);
+  --color-info-ink: var(--info-ink);
+  --color-aqi-good-bg: var(--aqi-good-bg);
+  --color-aqi-good-ink: var(--aqi-good-ink);
+  --color-aqi-good-bar: var(--aqi-good-bar);
+  --color-aqi-satisfactory-bg: var(--aqi-satisfactory-bg);
+  --color-aqi-satisfactory-ink: var(--aqi-satisfactory-ink);
+  --color-aqi-satisfactory-bar: var(--aqi-satisfactory-bar);
+  --color-aqi-moderately_polluted-bg: var(--aqi-moderately_polluted-bg);
+  --color-aqi-moderately_polluted-ink: var(--aqi-moderately_polluted-ink);
+  --color-aqi-moderately_polluted-bar: var(--aqi-moderately_polluted-bar);
+  --color-aqi-poor-bg: var(--aqi-poor-bg);
+  --color-aqi-poor-ink: var(--aqi-poor-ink);
+  --color-aqi-poor-bar: var(--aqi-poor-bar);
+  --color-aqi-very_poor-bg: var(--aqi-very_poor-bg);
+  --color-aqi-very_poor-ink: var(--aqi-very_poor-ink);
+  --color-aqi-very_poor-bar: var(--aqi-very_poor-bar);
+  --color-aqi-severe-bg: var(--aqi-severe-bg);
+  --color-aqi-severe-ink: var(--aqi-severe-ink);
+  --color-aqi-severe-bar: var(--aqi-severe-bar);
+
+  /* System font stack: no network fetch at build time, no layout shift. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+  }
+
+  :focus-visible {
+    outline: var(--focus-ring-width) solid var(--brand);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: var(--motion-instant) !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: var(--motion-instant) !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
