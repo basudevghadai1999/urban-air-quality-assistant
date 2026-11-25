@@ -6,7 +6,7 @@ GenAI-assisted urban air quality guidance for Indian families and communities li
 
 ## Project status
 
-Built and verified: the CPCB Indian AQI engine, Open-Meteo integration with caching and last-known-good fallback, Upstash Redis cache, rate limiting and AI budgets (Lua scripts verified against a real Upstash database on 2026-11-24; see Deployment for what that does and does not cover), the deterministic recommendation engine, validated Gemini and Groq explanations with a deterministic fallback, the dashboard (seven cities, four profiles), a question-and-answer chat assistant, and a Render Free blueprint. Not yet done: a real Render deployment, and a live re-check of the final Gemini prompts (Gemini has never been run live).
+Built and verified: the CPCB Indian AQI engine, Open-Meteo integration with caching and last-known-good fallback, Upstash Redis cache, rate limiting and AI budgets (verified against a real database), the deterministic recommendation engine, validated Gemini and Groq explanations with a deterministic fallback, the dashboard (seven cities, four profiles), a question-and-answer chat assistant, and a Render Free blueprint. Not yet done: a real Render deployment, and a live re-check of the final Gemini prompts (Gemini has never been run live).
 
 Open the app and pick a city and a profile. The page shows the plain-language explanation (generated on click), the air quality overview, outdoor windows, recommendations and impact estimates. The floating **Ask a question** button opens the chat assistant.
 
@@ -456,7 +456,7 @@ Verified on 2026-11-24 from the documents themselves. **These are the providers'
 
 ## Deployment
 
-**Nothing here has been deployed to Render.** The rate-limit and AI-budget Lua scripts were run against a real Upstash Redis on 2026-11-24, at commit `e2bcac5`, through the app's own Redis client, rate limiter, budget and cache classes under a throwaway key prefix (15 checks: sequential and 40-way concurrent limiting that allowed exactly the limit, budget caps, TTLs, UTC reset with an injected clock, cache round-trip and cleanup). Both scripts are byte-identical to that run (SHA-256 prefixes `164b61d2699a5c31` for the budget script and `6900fd94840edb76` for the rate-limit script). The post-`e2bcac5` reply validation and REST-client changes (the `replies.ts` helpers) are otherwise covered by in-process stand-ins (including a real local HTTP server speaking the Upstash REST protocol). On 2026-11-25 a one-off check against the same database, on the current tree, confirmed that the stricter reply validation and REST-client envelope handling accept real Upstash replies (`SET ... EX` answers `OK`, `DEL` answers 1 and 0, success bodies carry only `result`, budget grant and refusal replies and rate-limit allow and refusal replies pass) and that tampered replies are still rejected. A command Redis rejects arrives as HTTP 400 with an `error` body, which the client reports as an `http` error. What has **not** been run against a real Redis: the scripts' repair branches for a key without an expiry; a real UTC midnight; and production keys. Do the verification below after deploying.
+**Nothing here has been deployed or run against a real Redis.** The Redis client and rate-limit script are tested against in-process stand-ins (including a real local HTTP server speaking the Upstash REST protocol); the Lua script has not been executed by a real Redis. Do the verification below after deploying.
 
 ### Local development
 
@@ -524,14 +524,14 @@ The provider endpoint is the free one and no paid credential is supported yet (c
 ### Verify the deployment
 
 1. `curl -i "https://<your-domain>/api/air?cityId=mumbai"`: expect `200`, and in the body `cache.capability: "persistent"` and `cache.degraded: false`. `X-Air-Cache-Capability: memory-only` or `cache.degraded: true` means Redis is not working or not configured.
-2. In the Upstash data browser, expect `air:v1:snapshot:mumbai` with a TTL near 86,400 s, and `air:v1:rl:c:<32 hex characters>` keys with a TTL of at most 60 s. The script itself was verified on a real Redis on 2026-11-24 (see above), but not with production keys: if no `air:v1:rl:` key appears, or the logs show `air.rate_limiter_unavailable`, investigate before relying on the limiter.
+2. In the Upstash data browser, expect `air:v1:snapshot:mumbai` with a TTL near 86,400 s, and `air:v1:rl:c:<32 hex characters>` keys with a TTL of at most 60 s. This is the first time the Lua script runs on a real Redis: if no `air:v1:rl:` key appears, or the logs show `air.rate_limiter_unavailable`, investigate before relying on the limiter.
 3. Check the function logs for `air.metric` lines with `redis_failure`, `rate_limit_degraded` or `cache_entry_corrupt`.
 4. After a few minutes, request a different city from another network and confirm `X-Air-Cache` is `hit` on a fresh instance (a durable cache working across instances).
 5. Check the per-client limit: send more than `AIR_RATE_LIMIT_MAX` requests in a minute and expect `429` with `Retry-After`. With `TRUST_RENDER_CF_CONNECTING_IP=true`, two networks should have separate allowances. If every client shares one bucket, the header is missing or invalid.
 
 ### Known limitations
 
-- **Not verified on a real Render deployment**, or with production Redis keys (the Lua scripts themselves were verified against a real Upstash Redis; see above), including the free instance's memory use and cold start.
+- **Unverified against a real Redis** (see above), and **against a real Render deployment**, including the free instance's memory use and cold start.
 - **A Redis outage means no live refresh for cold instances** (scenario F): by design the limiter never fails open, so a cold instance with nothing in memory answers 503 rather than calling Open-Meteo unmetered.
 - **Fixed-window limiting** allows a burst of up to twice the limit across a window boundary.
 - **Without `TRUST_RENDER_CF_CONNECTING_IP=true`**, or if `CF-Connecting-IP` is missing or invalid, per-client limiting degrades to one shared bucket. Render's documentation does not say whether a service can be reached without its proxy; the flag is the operator's assertion that it cannot.

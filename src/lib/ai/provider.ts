@@ -27,17 +27,6 @@ export interface ProviderRequest {
   /** Gemini only. Null: do not send a thinking configuration. */
   readonly thinkingBudget: number | null;
   readonly timeoutMs: number;
-  /** Aborts the call when the caller no longer needs the answer. Never aborts shared work. */
-  readonly signal?: AbortSignal;
-}
-
-/**
- * The signal one provider call runs under: its own timeout (plus `slackMs` for a transport's second guard),
- * and the caller's signal when there is one. Whichever fires first aborts the request and its body read.
- */
-export function callSignal(timeoutMs: number, caller?: AbortSignal, slackMs = 0): AbortSignal {
-  const timeout = AbortSignal.timeout(timeoutMs + slackMs);
-  return caller === undefined ? timeout : AbortSignal.any([timeout, caller]);
 }
 
 export interface ProviderRawResponse {

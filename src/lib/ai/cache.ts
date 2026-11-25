@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 
 import type { SafeLogger } from "@/lib/observability/logger";
 import { noopMetrics, type AirMetrics } from "@/lib/observability/metrics";
-import { expectOk, isRecord, type RedisCommandClient } from "@/lib/redis";
+import type { RedisCommandClient } from "@/lib/redis";
 import { isRedisError } from "@/lib/redis/errors";
 
 import type { AiExplanation } from "./types";
@@ -98,8 +98,8 @@ export function createAiCache(options: AiCacheOptions): AiCache {
 
       let explanation: AiExplanation | null = null;
       try {
-        const payload: unknown = JSON.parse(raw);
-        if (isRecord(payload) && payload.v === ENTRY_VERSION) explanation = accept(payload.explanation);
+        const payload = JSON.parse(raw) as { v?: unknown; explanation?: unknown };
+        if (payload.v === ENTRY_VERSION) explanation = accept(payload.explanation);
       } catch {
         explanation = null;
       }
@@ -123,7 +123,7 @@ export function createAiCache(options: AiCacheOptions): AiCache {
       const payload = JSON.stringify({ v: ENTRY_VERSION, storedAtMs: now(), explanation });
       if (payload.length > MAX_PAYLOAD_CHARS) return;
       try {
-        expectOk(await client.command(["SET", key, payload, "EX", options.ttlSeconds]));
+        await client.command(["SET", key, payload, "EX", options.ttlSeconds]);
       } catch (error) {
         redisFailed(error);
       }

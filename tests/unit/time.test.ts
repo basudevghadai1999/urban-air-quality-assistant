@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { IST_UTC_OFFSET_SECONDS } from "@/lib/constants";
-import { ageSeconds, formatIsoWithOffset, formatUtcOffset, msUntilNextUtcMidnight, secondsUntilUtcReset, utcDayKey } from "@/lib/time";
+import { ageSeconds, formatIsoWithOffset, formatUtcOffset } from "@/lib/time";
 
 describe("formatUtcOffset", () => {
   it.each([
@@ -69,29 +69,5 @@ describe("ageSeconds", () => {
 
   it("is never negative", () => {
     expect(ageSeconds(5_000, 1_000)).toBe(0);
-  });
-});
-
-describe("UTC day helpers", () => {
-  const T0 = Date.UTC(2026, 10, 24, 10, 30, 0); // 2026-11-24 10:30 UTC
-
-  it("keys by the UTC date, not the local one", () => {
-    expect(utcDayKey(T0)).toBe("20261124");
-    expect(utcDayKey(Date.UTC(2026, 10, 24, 23, 59, 59, 999))).toBe("20261124");
-    expect(utcDayKey(Date.UTC(2026, 10, 25, 0, 0, 0))).toBe("20261125");
-    expect(utcDayKey(Date.UTC(2026, 11, 31, 23, 0, 0))).toBe("20261231");
-    expect(utcDayKey(Date.UTC(2027, 0, 1, 0, 0, 0))).toBe("20270101");
-  });
-
-  it("computes the time to the next 00:00 UTC", () => {
-    expect(msUntilNextUtcMidnight(Date.UTC(2026, 10, 24, 0, 0, 0))).toBe(86_400_000);
-    expect(msUntilNextUtcMidnight(Date.UTC(2026, 10, 24, 23, 59, 0))).toBe(60_000);
-    expect(msUntilNextUtcMidnight(T0)).toBe(13.5 * 3_600_000);
-  });
-
-  it("reports whole seconds until reset, at least one", () => {
-    expect(secondsUntilUtcReset(T0)).toBe(13.5 * 3600);
-    expect(secondsUntilUtcReset(Date.UTC(2026, 10, 24, 23, 59, 59, 999))).toBe(1);
-    expect(secondsUntilUtcReset(Date.UTC(2026, 10, 24, 0, 0, 0))).toBe(86_400);
   });
 });

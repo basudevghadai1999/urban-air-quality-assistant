@@ -9,11 +9,10 @@ import type { NormalizedAirData } from "@/types/air";
 import { aiCacheKey, type AiCache } from "./cache";
 import type { AiConfigResult, AiRuntimeConfig } from "./config";
 import { buildGroundingContext, MAX_CONTEXT_BYTES } from "./context";
-import { AI_REASON_MESSAGES, AiError, isAiError, type AiReasonCode } from "./errors";
+import { AI_REASON_MESSAGES, AiError, isAiError, isFailoverEligible, type AiReasonCode } from "./errors";
 import { buildFallbackExplanation } from "./fallback";
 import { generateExplanationText } from "./generator";
 import { PROMPT_VERSION } from "./prompt";
-import { runProviderChain } from "./providerChain";
 import type { ProviderBudget } from "./providerBudget";
 import type { ProviderTarget, ProviderTransport } from "./provider";
 import type { AiAttempt, AiEnvelope, AiExplanation, AiProviderName, AiTokenUsage } from "./types";
@@ -165,54 +164,87 @@ export function createExplanationService(deps: ExplanationServiceDeps): Explanat
       return fallback(result, "AI_PROTECTION_UNAVAILABLE");
     }
 
-    const outcome = await runProviderChain({
-      providers: config.providers,
-      timeoutMs: config.settings.timeoutMs,
-      now: clock,
-      budget: deps.budget,
-      metrics,
-      getTransport: deps.getTransport,
-      onRequest: (provider) => {
-        metrics.increment("ai_provider_request", { provider: provider.id });
-        if (provider.id === "gemini") metrics.increment("gemini_request");
-      },
-      onFailure: (provider, code, rejection) => recordFailure(provider, code, rejection),
-      attempt: async (provider, transport, call) => {
-        const started = clock();
-        let out;
-        try {
-          out = await generateExplanationText(transport, provider, config.settings, grounding, { timeoutMs: call.timeoutMs });
-        } catch (error) {
-          return { ok: false, code: isAiError(error) ? error.code : "AI_INTERNAL" };
-        }
-        const latency = clock() - started;
+    const attempts: AiAttempt[] = [];
+    let lastCode: AiReasonCode = "AI_NOT_CONFIGURED";
+    let lastRetryAfter: number | undefined;
 
-        const checked = validateModelText(out.text, validation);
-        if (!checked.ok) return { ok: false, code: checked.code, rejection: checked.rejection };
-
-        recordUsage(provider, latency, out.usage);
-        metrics.increment("ai_provider_success", { provider: provider.id });
-        if (provider.id === "gemini") metrics.increment("gemini_success");
-        try {
-          const key = keys.get(provider.id);
-          if (key !== undefined) await deps.cache.set(key, checked.value);
-        } catch {
-          // A cache failure costs only a future miss.
+    for (const [index, provider] of config.providers.entries()) {
+      const hasNext = index < config.providers.length - 1;
+      const next = (code: AiReasonCode): boolean => {
+        attempts.push({ provider: provider.id, reasonCode: code });
+        lastCode = code;
+        if (hasNext && isFailoverEligible(code)) {
+          metrics.increment("ai_provider_fallback", { provider: provider.id, code });
+          return true;
         }
-        return { ok: true, value: { explanation: checked.value, usage: out.usage } };
-      },
-    });
-    if (outcome.kind === "fallback") return fallback(result, outcome.code, outcome.attempts, outcome.retryAfterSeconds);
-    return envelope({
-      status: "generated",
-      reasonCode: null,
-      message: `Explanation written by ${PROVIDER_LABEL[outcome.provider.id]} from the calculated results.`,
-      explanation: outcome.value.explanation,
-      provider: outcome.provider.id,
-      model: outcome.provider.model,
-      attempts: outcome.attempts,
-      tokenUsage: outcome.value.usage,
-    });
+        return false;
+      };
+
+      // Atomic budget: charges the global AND this provider's counter together. A failure to decide is a refusal.
+      let reservation;
+      try {
+        reservation = await deps.budget.reserve(provider.id);
+      } catch {
+        metrics.increment("ai_protection_unavailable", { layer: "budget" });
+        return fallback(result, "AI_PROTECTION_UNAVAILABLE", attempts);
+      }
+      if (!reservation.allowed) {
+        metrics.increment("ai_budget_rejection", { provider: provider.id, kind: reservation.deniedBy ?? "unknown" });
+        lastRetryAfter = reservation.resetsInSeconds;
+        // The global cap ends the chain: another provider would draw on the same cap. A provider cap only skips that provider.
+        if (reservation.deniedBy === "global") return fallback(result, "AI_BUDGET_EXHAUSTED", attempts, reservation.resetsInSeconds);
+        attempts.push({ provider: provider.id, reasonCode: "AI_BUDGET_EXHAUSTED" });
+        lastCode = "AI_BUDGET_EXHAUSTED";
+        continue;
+      }
+
+      metrics.increment("ai_provider_request", { provider: provider.id });
+      if (provider.id === "gemini") metrics.increment("gemini_request");
+      const started = clock();
+
+      let text: string;
+      let usage: AiTokenUsage;
+      try {
+        const out = await generateExplanationText(deps.getTransport(provider), provider, config.settings, grounding);
+        text = out.text;
+        usage = out.usage;
+      } catch (error) {
+        const code: AiReasonCode = isAiError(error) ? error.code : "AI_INTERNAL";
+        recordFailure(provider, code);
+        if (next(code)) continue;
+        return fallback(result, code, attempts);
+      }
+      const latency = clock() - started;
+
+      const checked = validateModelText(text, validation);
+      if (!checked.ok) {
+        recordFailure(provider, checked.code, checked.rejection);
+        if (next(checked.code)) continue;
+        return fallback(result, checked.code, attempts);
+      }
+
+      recordUsage(provider, latency, usage);
+      metrics.increment("ai_provider_success", { provider: provider.id });
+      if (provider.id === "gemini") metrics.increment("gemini_success");
+      try {
+        const key = keys.get(provider.id);
+        if (key !== undefined) await deps.cache.set(key, checked.value);
+      } catch {
+        // A cache failure costs only a future miss.
+      }
+      return envelope({
+        status: "generated",
+        reasonCode: null,
+        message: `Explanation written by ${PROVIDER_LABEL[provider.id]} from the calculated results.`,
+        explanation: checked.value,
+        provider: provider.id,
+        model: provider.model,
+        attempts,
+        tokenUsage: usage,
+      });
+    }
+
+    return fallback(result, lastCode, attempts, lastCode === "AI_BUDGET_EXHAUSTED" ? lastRetryAfter : undefined);
   }
 
   async function run(input: ExplainInput): Promise<AiEnvelope> {

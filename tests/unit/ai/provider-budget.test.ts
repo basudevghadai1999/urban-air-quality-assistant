@@ -120,12 +120,4 @@ describe("failure is a refusal, never permission", () => {
     const short = { command: () => Promise.resolve([1]) };
     await expect(new RedisProviderBudget({ client: short, limits: limits(5) }).reserve("gemini")).rejects.toBeDefined();
   });
-
-  it.each([null, "x", [1], [1, 0, 1], [1, 0, 1, 1, 1], ["1", 0, 1, 1], [1, 3, 1, 1], [1, 0, -1, 1], [1, 0, 1, 1.5], [0, "1", 1, 1], []])(
-    "rejects a malformed Redis reply %j",
-    async (reply) => {
-      const client = { command: () => Promise.resolve(reply) };
-      await expect(new RedisProviderBudget({ client, limits: limits(5) }).reserve("gemini")).rejects.toBeDefined();
-    },
-  );
 });

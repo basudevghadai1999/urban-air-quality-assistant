@@ -43,61 +43,27 @@ export interface GenerationOutput {
   readonly usage: TokenUsage;
 }
 
-/** What differs between one kind of request and another; everything else about a model call is shared. */
-export interface PromptParts {
-  readonly systemInstruction: string;
-  readonly userPrompt: string;
-  readonly responseJsonSchema: Record<string, unknown>;
-}
-
-/** Per-call limits that may be tighter than the configured ones: the time left in the chain, a caller that can leave. */
-export interface CallLimits {
-  readonly timeoutMs?: number;
-  readonly signal?: AbortSignal;
-}
-
-/** One provider call for any prompt: the shared request limits, error classification and response checks. */
-export async function generateText(
+export async function generateExplanationText(
   transport: ProviderTransport,
   target: { readonly id: "gemini" | "groq"; readonly model: string },
   settings: AiSettings,
-  prompt: PromptParts,
-  call: CallLimits = {},
+  grounding: { readonly json: string; readonly allowedIds: readonly string[] },
 ): Promise<GenerationOutput> {
   let response: ProviderRawResponse;
   try {
     response = await transport.generate({
       model: target.model,
-      ...prompt,
+      systemInstruction: SYSTEM_INSTRUCTION,
+      userPrompt: buildUserPrompt(grounding.json),
+      responseJsonSchema: buildResponseJsonSchema(grounding.allowedIds),
       maxOutputTokens: settings.maxOutputTokens,
       temperature: GENERATION_TEMPERATURE,
       thinkingBudget: target.id === "gemini" ? defaultThinkingBudget(target.model, settings.thinkingBudget) : null,
-      timeoutMs: call.timeoutMs ?? settings.timeoutMs,
-      ...(call.signal === undefined ? {} : { signal: call.signal }),
+      timeoutMs: settings.timeoutMs,
     });
   } catch (error) {
     // The message is never read: it can contain the provider's response text.
     throw new AiError(classifyGeminiError(error));
   }
   return { text: interpretResponse(response), usage: response.usage ?? NO_USAGE };
-}
-
-export function generateExplanationText(
-  transport: ProviderTransport,
-  target: { readonly id: "gemini" | "groq"; readonly model: string },
-  settings: AiSettings,
-  grounding: { readonly json: string; readonly allowedIds: readonly string[] },
-  call: CallLimits = {},
-): Promise<GenerationOutput> {
-  return generateText(
-    transport,
-    target,
-    settings,
-    {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      userPrompt: buildUserPrompt(grounding.json),
-      responseJsonSchema: buildResponseJsonSchema(grounding.allowedIds),
-    },
-    call,
-  );
 }

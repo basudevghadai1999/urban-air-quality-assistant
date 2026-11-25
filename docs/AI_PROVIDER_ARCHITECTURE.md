@@ -54,7 +54,7 @@ A provider without a key is **skipped**, never substituted: a missing Gemini key
 | `AI_DAILY_BUDGET` | 300 | **global** provider calls per UTC day |
 | `AI_GEMINI_DAILY_BUDGET` | 200 | Gemini calls per UTC day |
 | `AI_GROQ_DAILY_BUDGET` | 200 | Groq calls per UTC day |
-| `AI_REQUEST_TIMEOUT_MS` | 20000 | per provider call. The whole chain also has one deadline, `max(timeout, min(2 x timeout, 45 s))` (40 s at the default, 60 s at the 60 s maximum): a later provider gets only the time left and is not started, or charged, when under 2 s remains. The answer is then the deterministic fallback. |
+| `AI_REQUEST_TIMEOUT_MS` | 20000 | per call |
 | `AI_MAX_OUTPUT_TOKENS` | 3000 | per call (thinking tokens on Gemini 2.5, and Groq reasoning tokens, count against it) |
 | `AI_CACHE_TTL_SECONDS` | 1800 | |
 | `AI_EXPLANATIONS_ENABLED` | true | kill switch for both providers |
@@ -118,7 +118,7 @@ Key: SHA-256 of prompt version, **provider, model**, and the exact context (whic
 
 ## 9. Observability
 
-`ai_provider_request`, `ai_provider_success`, `ai_provider_failure` (with `provider` and `code`), `ai_provider_fallback`, `ai_fallback` (deterministic usage), `ai_cancelled` (the caller left during a call; not a provider failure), `ai_deadline_exceeded` (the chain ran out of time before a later provider), `ai_transport_failure` (a provider client could not be built: no call, no charge), `ai_cache_hit`, `ai_cache_miss`, `ai_budget_rejection` (`provider`, `kind`), `ai_latency_ms_total`, `ai_tokens_input|output|total|unreported`, plus the Phase 3B counters. Only allow-listed fields (`provider`, `code`, `kind`, `layer`, `status`, `cityId`, `operation`) are emitted. A static test forbids logging prompts, context, explanations, keys or provider messages.
+`ai_provider_request`, `ai_provider_success`, `ai_provider_failure` (with `provider` and `code`), `ai_provider_fallback`, `ai_fallback` (deterministic usage), `ai_cache_hit`, `ai_cache_miss`, `ai_budget_rejection` (`provider`, `kind`), `ai_latency_ms_total`, `ai_tokens_input|output|total|unreported`, plus the Phase 3B counters. Only allow-listed fields (`provider`, `code`, `kind`, `layer`, `status`, `cityId`, `operation`) are emitted. A static test forbids logging prompts, context, explanations, keys or provider messages.
 
 ## 10. Security
 
@@ -132,7 +132,7 @@ Set `GEMINI_API_KEY` and/or `GROQ_API_KEY` (either is enough), `UPSTASH_REDIS_RE
 
 - The final prompt and schema have not been run against Groq or Gemini; the one Groq call preceded tuning and failed the schema check. The real rejection rate is unmeasured, and the deterministic fallback absorbs any rejection.
 - A 20B reasoning model tends to restate figures despite instructions. The validator rejects the ones it cannot ground, which costs a fallback, not safety.
-- The budget script (SHA-256 prefix `164b61d2699a5c31`) ran against a real Upstash Redis on 2026-11-24 at commit `e2bcac5` (concurrency, caps, TTLs, UTC reset with an injected clock) and is byte-identical to the current script. The stricter reply validation added later was checked against real Upstash replies on 2026-11-25 (grant and refusal accepted, tampered replies rejected); the PTTL-repair branch and a real midnight cutover were never run live.
+- The budget script ran against an in-process emulation, not a real Redis.
 - A second provider means a second provider's data handling; Groq receives the same compact, non-personal context as Gemini.
 - Groq's published rate limits are inconsistent across its own pages.
 - Failover can add the first provider's latency (up to the timeout) before Groq is tried.

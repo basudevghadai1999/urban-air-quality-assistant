@@ -7,7 +7,6 @@ import { noopMetrics } from "@/lib/observability/metrics";
 import { MemoryRateLimiter, detectIpTrust } from "@/lib/ratelimit";
 import { createRateLimitGate, type RateLimitGate } from "@/lib/ratelimit/gate";
 import { RedisRateLimiter } from "@/lib/ratelimit/redis";
-import { processSingleton } from "@/lib/singleton";
 
 import { MemoryProviderBudget, RedisProviderBudget, type ProviderBudget } from "./providerBudget";
 import { createAiCache } from "./cache";
@@ -19,8 +18,8 @@ import { createChatService, type ChatService } from "./chatService";
 import { createExplanationService, type ExplanationService } from "./service";
 
 /**
- * Process-wide wiring for Gemini explanations, built once per process like the air service (`processSingleton`),
- * so route bundles and hot reloads share one cache, one limiter, one budget and one SDK client.
+ * Process-wide wiring for Gemini explanations, on `globalThis` like the air service so route
+ * bundles and hot reloads share one cache, one limiter, one budget and one SDK client.
  *
  * Protection by environment (nothing ever fails open into unlimited Gemini calls):
  *   Redis configured     per-client limit and the daily budget are shared by every instance;
@@ -29,6 +28,9 @@ import { createExplanationService, type ExplanationService } from "./service";
  *   no Redis, production   AI is PAUSED (reason AI_PROTECTION_UNAVAILABLE): per-instance counters
  *                        cannot bound serverless spend, so the model is never called.
  */
+
+const SERVICE_KEY = Symbol.for("urban-air-intelligence.ai-service");
+type Store = Record<symbol, unknown>;
 
 const pausedGate: RateLimitGate = () => Promise.resolve({ kind: "degraded", allowUpstream: false });
 const pausedBudget: ProviderBudget = {
@@ -43,12 +45,15 @@ interface Wiring {
   readonly getTransport: (provider: ProviderTarget) => ProviderTransport;
 }
 
+const WIRING_KEY = Symbol.for("urban-air-intelligence.ai-wiring");
+const CHAT_KEY = Symbol.for("urban-air-intelligence.chat-service");
+
 /** The limiter, budgets and provider clients, built once and shared by the explanation and chat services. */
 function getWiring(): Wiring {
-  return processSingleton("ai-wiring", createWiring);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[WIRING_KEY] as Wiring | undefined;
+  if (existing !== undefined) return existing;
 
-function createWiring(): Wiring {
   const infra = getSharedInfrastructure();
 
   // An invalid setting must not take the API down: `resolveAiConfig` reports it per call (AI_INVALID_CONFIG),
@@ -102,16 +107,18 @@ function createWiring(): Wiring {
     return instance;
   };
 
-  return { settings, infra, clientGate, budget, getTransport };
+  const wiring: Wiring = { settings, infra, clientGate, budget, getTransport };
+  store[WIRING_KEY] = wiring;
+  return wiring;
 }
 
 export function getAiExplanationService(): ExplanationService {
-  return processSingleton("ai-service", createDefaultExplanationService);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[SERVICE_KEY] as ExplanationService | undefined;
+  if (existing !== undefined) return existing;
 
-function createDefaultExplanationService(): ExplanationService {
   const { settings, infra, clientGate, budget, getTransport } = getWiring();
-  return createExplanationService({
+  const service = createExplanationService({
     getConfig: () => resolveAiConfig(),
     getTransport,
     cache: createAiCache({ ttlSeconds: settings.cacheTtlSeconds, client: infra.client, logger: consoleSafeLogger, metrics: infra.metrics }),
@@ -120,16 +127,18 @@ function createDefaultExplanationService(): ExplanationService {
     metrics: infra.metrics,
     logger: consoleSafeLogger,
   });
+  store[SERVICE_KEY] = service;
+  return service;
 }
 
 /** The chat assistant. It shares the explanation layer's per-client limit and daily budgets. */
 export function getChatService(): ChatService {
-  return processSingleton("chat-service", createDefaultChatService);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[CHAT_KEY] as ChatService | undefined;
+  if (existing !== undefined) return existing;
 
-function createDefaultChatService(): ChatService {
   const { infra, clientGate, budget, getTransport } = getWiring();
-  return createChatService({
+  const service = createChatService({
     getConfig: () => resolveAiConfig(),
     getTransport,
     budget,
@@ -137,4 +146,6 @@ function createDefaultChatService(): ChatService {
     metrics: infra.metrics,
     logger: consoleSafeLogger,
   });
+  store[CHAT_KEY] = service;
+  return service;
 }

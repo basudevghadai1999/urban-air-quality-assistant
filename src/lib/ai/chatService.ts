@@ -6,15 +6,14 @@ import { silentLogger, type SafeLogger } from "@/lib/observability/logger";
 import type { RateLimitGate } from "@/lib/ratelimit/gate";
 import type { NormalizedAirData } from "@/types/air";
 
-import type { AiConfigResult } from "./config";
+import type { AiConfigResult, AiRuntimeConfig } from "./config";
 import { buildChatFallback } from "./chatFallback";
 import { buildChatUserPrompt, CHAT_PROMPT_VERSION, CHAT_SYSTEM_INSTRUCTION, type ChatPromptTurn } from "./chatPrompt";
 import { buildChatResponseJsonSchema, parseChatAnswer } from "./chatSchema";
 import type { ChatEnvelope } from "./chatTypes";
 import { buildGroundingContext, MAX_CONTEXT_BYTES } from "./context";
-import { isAiError, type AiReasonCode } from "./errors";
-import { generateText } from "./generator";
-import { runProviderChain } from "./providerChain";
+import { AiError, classifyGeminiError, isAiError, isFailoverEligible, type AiReasonCode } from "./errors";
+import { defaultThinkingBudget, GENERATION_TEMPERATURE, interpretResponse } from "./generator";
 import type { ProviderBudget } from "./providerBudget";
 import type { ProviderTarget, ProviderTransport } from "./provider";
 import { validateAnswerText } from "./validator";
@@ -73,6 +72,33 @@ const CHAT_REASON_MESSAGES: Partial<Readonly<Record<AiReasonCode, string>>> = {
 const messageFor = (code: AiReasonCode): string => CHAT_REASON_MESSAGES[code] ?? GENERIC;
 
 const PROVIDER_LABEL: Readonly<Record<"gemini" | "groq", string>> = { gemini: "Gemini", groq: "Groq" };
+
+async function generateChatText(
+  transport: ProviderTransport,
+  target: ProviderTarget,
+  config: AiRuntimeConfig,
+  contextJson: string,
+  history: readonly ChatPromptTurn[],
+  message: string,
+): Promise<string> {
+  let response;
+  try {
+    response = await transport.generate({
+      model: target.model,
+      systemInstruction: CHAT_SYSTEM_INSTRUCTION,
+      userPrompt: buildChatUserPrompt(contextJson, history, message),
+      responseJsonSchema: buildChatResponseJsonSchema(),
+      maxOutputTokens: config.settings.maxOutputTokens,
+      temperature: GENERATION_TEMPERATURE,
+      thinkingBudget: target.id === "gemini" ? defaultThinkingBudget(target.model, config.settings.thinkingBudget) : null,
+      timeoutMs: config.settings.timeoutMs,
+    });
+  } catch (error) {
+    // The message is never read: it can contain the provider's response text.
+    throw new AiError(classifyGeminiError(error));
+  }
+  return interpretResponse(response);
+}
 
 type Checked = { readonly ok: true; readonly answer: string } | { readonly ok: false; readonly code: AiReasonCode };
 
@@ -138,43 +164,65 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       return fallback(input, "AI_PROTECTION_UNAVAILABLE");
     }
 
-    const prompt = {
-      systemInstruction: CHAT_SYSTEM_INSTRUCTION,
-      userPrompt: buildChatUserPrompt(grounding.json, input.history, input.message),
-      responseJsonSchema: buildChatResponseJsonSchema(),
-    };
-    const outcome = await runProviderChain({
-      providers: config.providers,
-      timeoutMs: config.settings.timeoutMs,
-      budget: deps.budget,
-      metrics,
-      getTransport: deps.getTransport,
-      // A visitor who has gone away aborts the call in flight and does not cause another provider to be called and charged.
-      isCancelled: () => request.signal.aborted,
-      onRequest: (provider) => metrics.increment("ai_provider_request", { provider: provider.id, kind: "chat" }),
-      onFailure: (provider, code) => metrics.increment("ai_provider_failure", { provider: provider.id, code, kind: "chat" }),
-      attempt: async (provider, transport, call) => {
-        let text: string;
-        try {
-          text = (await generateText(transport, provider, config.settings, prompt, { timeoutMs: call.timeoutMs, signal: request.signal })).text;
-        } catch (error) {
-          return { ok: false, code: isAiError(error) ? error.code : "AI_INTERNAL" };
+    let lastCode: AiReasonCode = "AI_NOT_CONFIGURED";
+    let lastRetryAfter: number | undefined;
+
+    for (const [index, provider] of config.providers.entries()) {
+      const hasNext = index < config.providers.length - 1;
+      const failed = (code: AiReasonCode): boolean => {
+        lastCode = code;
+        metrics.increment("ai_provider_failure", { provider: provider.id, code, kind: "chat" });
+        if (hasNext && isFailoverEligible(code)) {
+          metrics.increment("ai_provider_fallback", { provider: provider.id, code });
+          return true;
         }
-        const checked = checkAnswer(text, validation);
-        if (!checked.ok) return { ok: false, code: checked.code };
-        metrics.increment("ai_provider_success", { provider: provider.id, kind: "chat" });
-        return { ok: true, value: checked.answer };
-      },
-    });
-    if (outcome.kind === "fallback") return fallback(input, outcome.code, outcome.retryAfterSeconds);
-    return envelope({
-      status: "generated",
-      answer: outcome.value,
-      reasonCode: null,
-      message: `Answer written by ${PROVIDER_LABEL[outcome.provider.id]} from the calculated results.`,
-      provider: outcome.provider.id,
-      model: outcome.provider.model,
-    });
+        return false;
+      };
+
+      // Atomic budget: charges the global AND this provider's counter. A failure to decide is a refusal.
+      let reservation;
+      try {
+        reservation = await deps.budget.reserve(provider.id);
+      } catch {
+        metrics.increment("ai_protection_unavailable", { layer: "budget" });
+        return fallback(input, "AI_PROTECTION_UNAVAILABLE");
+      }
+      if (!reservation.allowed) {
+        metrics.increment("ai_budget_rejection", { provider: provider.id, kind: reservation.deniedBy ?? "unknown" });
+        lastRetryAfter = reservation.resetsInSeconds;
+        if (reservation.deniedBy === "global") return fallback(input, "AI_BUDGET_EXHAUSTED", reservation.resetsInSeconds);
+        lastCode = "AI_BUDGET_EXHAUSTED";
+        continue;
+      }
+
+      metrics.increment("ai_provider_request", { provider: provider.id, kind: "chat" });
+      let text: string;
+      try {
+        text = await generateChatText(deps.getTransport(provider), provider, config, grounding.json, input.history, input.message);
+      } catch (error) {
+        const code: AiReasonCode = isAiError(error) ? error.code : "AI_INTERNAL";
+        if (failed(code)) continue;
+        return fallback(input, code);
+      }
+
+      const checked = checkAnswer(text, validation);
+      if (!checked.ok) {
+        if (failed(checked.code)) continue;
+        return fallback(input, checked.code);
+      }
+
+      metrics.increment("ai_provider_success", { provider: provider.id, kind: "chat" });
+      return envelope({
+        status: "generated",
+        answer: checked.answer,
+        reasonCode: null,
+        message: `Answer written by ${PROVIDER_LABEL[provider.id]} from the calculated results.`,
+        provider: provider.id,
+        model: provider.model,
+      });
+    }
+
+    return fallback(input, lastCode, lastCode === "AI_BUDGET_EXHAUSTED" ? lastRetryAfter : undefined);
   }
 
   return {

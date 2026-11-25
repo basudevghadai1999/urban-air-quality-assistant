@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { POST } from "@/app/api/recommend/route";
 import { GET } from "@/app/api/air/route";
-import type { RecommendApiError, RecommendApiSuccess } from "@/types/api";
+import type { RecommendApiError, RecommendApiSuccess } from "@/lib/api/recommendHandler";
 
 import { FETCHED_AT_MS, jsonResponse, makeOpenMeteoResponse } from "../fixtures/openMeteo";
 import { EVENING_DIP } from "../fixtures/engine";

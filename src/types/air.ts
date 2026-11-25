@@ -170,19 +170,16 @@ export interface NormalizedAirData {
   readonly cache: CacheInfo;
 }
 
-/** The one list of `/api/air` error codes: the type, the client validator and the tests all derive from it. */
-export const AIR_API_ERROR_CODES = [
-  "MISSING_CITY_ID",
-  "INVALID_CITY_ID",
-  "UNSUPPORTED_PARAMETER",
-  "DUPLICATE_PARAMETER",
-  "REQUEST_TOO_LARGE",
-  "RATE_LIMITED",
-  "RATE_LIMITING_UNAVAILABLE",
-  "AIR_DATA_UNAVAILABLE",
-  "INTERNAL_ERROR",
-] as const;
-export type AirApiErrorCode = (typeof AIR_API_ERROR_CODES)[number];
+export type AirApiErrorCode =
+  | "MISSING_CITY_ID"
+  | "INVALID_CITY_ID"
+  | "UNSUPPORTED_PARAMETER"
+  | "DUPLICATE_PARAMETER"
+  | "REQUEST_TOO_LARGE"
+  | "RATE_LIMITED"
+  | "RATE_LIMITING_UNAVAILABLE"
+  | "AIR_DATA_UNAVAILABLE"
+  | "INTERNAL_ERROR";
 
 export interface AirApiSuccess {
   readonly ok: true;

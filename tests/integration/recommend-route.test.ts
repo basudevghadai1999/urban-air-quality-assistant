@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MemoryCache } from "@/lib/cache";
-import { MAX_BODY_BYTES } from "@/lib/api/common";
-import { handleRecommendRequest } from "@/lib/api/recommendHandler";
-import type { RecommendApiError, RecommendApiSuccess } from "@/types/api";
+import { MAX_BODY_BYTES, handleRecommendRequest, type RecommendApiError, type RecommendApiSuccess } from "@/lib/api/recommendHandler";
 import { createAirService, type AirFetcher, type AirService } from "@/lib/data/airService";
 import { DEFAULT_AIR_SERVICE_CONFIG } from "@/lib/data/config";
 import { OpenMeteoError } from "@/lib/data/openMeteo/errors";
@@ -13,7 +11,6 @@ import type { GateDecision, RateLimitGate } from "@/lib/ratelimit/gate";
 import type { NormalizedAirData } from "@/types/air";
 
 import { FETCHED_AT_MS, makeOpenMeteoResponse } from "../fixtures/openMeteo";
-import { bytes, settle, streamedPost } from "../fixtures/streams";
 
 /** Provider data is SYNTHETIC and injected; no network is used. */
 
@@ -180,25 +177,6 @@ describe("POST /api/recommend: invalid requests", () => {
     const padded = JSON.stringify({ ...valid, preferences: { schedule: [{ activity: "errands", preferredStart: "10:00", durationMinutes: 20 }] }, pad: "x".repeat(MAX_BODY_BYTES) });
     await fail(await run(padded, service), 413, "REQUEST_TOO_LARGE");
     expect(calls).toEqual([]);
-  });
-
-  it("cuts off an endless chunked body that declares no length, before any air data is fetched", async () => {
-    const { service, calls } = liveService();
-    const probe = streamedPost(() => bytes("x".repeat(1024)));
-    const response = await handleRecommendRequest(probe.request, () => service, () => FETCHED_AT_MS);
-    await fail(response, 413, "REQUEST_TOO_LARGE");
-    expect(probe.cancelled()).toBe(true);
-    expect(probe.pulls()).toBeLessThanOrEqual(MAX_BODY_BYTES / 1024 + 3);
-    expect(calls).toEqual([]);
-  });
-
-  it("accepts a valid body that arrives in several chunks", async () => {
-    const { service } = liveService();
-    const data = bytes(JSON.stringify(valid));
-    const probe = streamedPost((i) => (i * 7 < data.length ? data.slice(i * 7, (i + 1) * 7) : null));
-    await settle();
-    const response = await handleRecommendRequest(probe.request, () => service, () => FETCHED_AT_MS);
-    expect(response.status).toBe(200);
   });
 
   it("cannot be steered by instructions placed in the body: free text is refused, never echoed", async () => {

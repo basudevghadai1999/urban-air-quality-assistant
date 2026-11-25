@@ -7,16 +7,6 @@ import { describe, expect, it } from "vitest";
 
 const dirs = ["src/components/dashboard", "src/lib/client"];
 const files = dirs.flatMap((d) => readdirSync(d).map((f) => ({ path: join(d, f), text: readFileSync(join(d, f), "utf8") })));
-
-/**
- * What the browser code must never do: compute. Any mention of a calculation function is a violation.
- * The `inhaledMassUg` result field may only appear as a schema declaration (`inhaledMassUg: z.…`); any other
- * use (arithmetic, an assignment, a read) is a violation.
- */
-const FORBIDDEN_CALCULATIONS = /calculateAqi|computeTripEmissions|compareExposure|generateRecommendations|buildGroundingContext/g;
-const INHALED_MASS_OUTSIDE_SCHEMA = /inhaledMassUg(?!\s*:\s*z\.)/g;
-const calculationViolations = (text: string): string[] => [...(text.match(FORBIDDEN_CALCULATIONS) ?? []), ...(text.match(INHALED_MASS_OUTSIDE_SCHEMA) ?? [])];
-
 const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 describe("dashboard source safety", () => {
@@ -43,34 +33,7 @@ describe("dashboard source safety", () => {
   });
 
   it("does not compute an AQI, an exposure or an emission", () => {
-    for (const f of files) expect(calculationViolations(code(f.text)), f.path).toEqual([]);
-  });
-
-  describe("the calculation guard", () => {
-    it("allows a schema to declare a result field, in every file alike", () => {
-      expect(calculationViolations("const s = z.looseObject({ inhaledMassUg: z.number(), n: 1 });")).toEqual([]);
-      expect(calculationViolations("inhaledMassUg:z.number().nullable()")).toEqual([]);
-    });
-
-    it.each([
-      ["a call to the AQI calculator", "const aqi = calculateAqi(input);"],
-      ["an import of the AQI calculator", 'import { calculateAqi } from "@/lib/aqi";'],
-      ["an emission calculation", "const t = computeTripEmissions(trip);"],
-      ["an exposure comparison", "compareExposure(a, b)"],
-      ["the recommendation engine", "const r = generateRecommendations(air, profile);"],
-      ["the grounding builder", "buildGroundingContext(result, air)"],
-      ["arithmetic on an inhaled mass", "const m = inhaledMassUg * 2;"],
-      ["a field filled by a calculation", "const out = { inhaledMassUg: concentration * rate * hours };"],
-      ["a field that merely starts like a schema", "const out = { inhaledMassUg: zeta(3) };"],
-      ["a read of an inhaled mass", "show(result.inhaledMassUg)"],
-    ])("still catches %s", (_name, snippet) => {
-      expect(calculationViolations(snippet)).not.toEqual([]);
-    });
-
-    it("cannot be dodged with a comment-only change: code inside comments is ignored, code outside is not", () => {
-      expect(calculationViolations(code("// calculateAqi(x)\n/* inhaledMassUg * 2 */"))).toEqual([]);
-      expect(calculationViolations(code("// note\nconst a = calculateAqi(x);"))).not.toEqual([]);
-    });
+    for (const f of files) expect(code(f.text), f.path).not.toMatch(/calculateAqi|computeTripEmissions|compareExposure|inhaledMassUg|generateRecommendations|buildGroundingContext/);
   });
 
   it("does not store anything in the browser", () => {

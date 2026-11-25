@@ -17,18 +17,17 @@ import { MemoryRateLimiter, detectIpTrust } from "@/lib/ratelimit";
 import { createRateLimitGate, type RateLimitGate } from "@/lib/ratelimit/gate";
 import { RedisRateLimiter } from "@/lib/ratelimit/redis";
 import { createUpstashRestClient, type RedisCommandClient } from "@/lib/redis";
-import { processSingleton } from "@/lib/singleton";
 import type { NormalizedAirData } from "@/types/air";
 
-import { createAirService, type AirService } from "./airService";
+import { consoleAirLogger, createAirService, type AirService } from "./airService";
 import { fetchOpenMeteoAirQuality } from "./openMeteo";
 
 /**
  * Process-wide wiring for the API route.
  *
- * Each instance is built once per PROCESS (see `processSingleton`), so every route bundle, and Next.js
- * dev hot reloads, share one cache, one limiter and one set of counters instead of each module copy
- * silently starting empty. Other instances (Render, serverless) each have their own; Redis is what they share.
+ * Instances live on `globalThis` under registered symbols so that every route
+ * bundle, and Next.js dev hot reloads, share one cache, one limiter and one set
+ * of counters instead of each module copy silently starting empty.
  *
  * Capability matrix (what protects what):
  *   Redis configured and healthy   durable last-known-good across cold starts and instances;
@@ -40,6 +39,9 @@ import { fetchOpenMeteoAirQuality } from "./openMeteo";
  *                                  `cache.degraded: true` and a startup warning is logged.
  */
 
+const SERVICE_KEY = Symbol.for("urban-air-intelligence.air-service");
+const GATE_KEY = Symbol.for("urban-air-intelligence.air-rate-limit-gate");
+const INFRA_KEY = Symbol.for("urban-air-intelligence.air-infrastructure");
 
 export interface Infrastructure {
   readonly setting: RedisSetting;
@@ -50,12 +52,14 @@ export interface Infrastructure {
   readonly ephemeralSecret: string;
 }
 
+type Store = Record<symbol, unknown>;
+
 /** Shared with the AI layer, so there is one Redis client, one set of counters and one hashing secret. */
 export function getSharedInfrastructure(): Infrastructure {
-  return processSingleton("air-infrastructure", createInfrastructure);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[INFRA_KEY] as Infrastructure | undefined;
+  if (existing !== undefined) return existing;
 
-function createInfrastructure(): Infrastructure {
   const setting = getRedisConfig();
   const production = isProductionRuntime();
   const client = setting.status === "configured" ? createUpstashRestClient(setting.config) : null;
@@ -68,20 +72,22 @@ function createInfrastructure(): Infrastructure {
     consoleSafeLogger.warn("air.durable_cache_not_configured", { kind: "memory-only-in-production" });
   }
 
-  return {
+  const infrastructure: Infrastructure = {
     setting,
     client,
     metrics: createAirMetrics(),
     production,
     ephemeralSecret: randomUUID(),
   };
+  store[INFRA_KEY] = infrastructure;
+  return infrastructure;
 }
 
 export function getAirService(): AirService {
-  return processSingleton("air-service", createDefaultAirService);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[SERVICE_KEY] as AirService | undefined;
+  if (existing !== undefined) return existing;
 
-function createDefaultAirService(): AirService {
   // Read configuration first: an invalid setting must throw before anything is stored.
   const config = getAirServiceConfig();
   const { client, metrics, production } = getSharedInfrastructure();
@@ -104,27 +110,29 @@ function createDefaultAirService(): AirService {
     metrics,
   });
 
-  return createAirService({
+  const service = createAirService({
     config,
     cache,
     now: () => Date.now(),
     fetcher: fetchOpenMeteoAirQuality,
-    logger: consoleSafeLogger,
+    logger: consoleAirLogger,
     metrics,
     capability: () => cache.capability(),
     production,
   });
+  store[SERVICE_KEY] = service;
+  return service;
 }
 
 export function getAirRateLimitGate(): RateLimitGate {
-  return processSingleton("air-rate-limit-gate", createAirRateLimitGate);
-}
+  const store = globalThis as unknown as Store;
+  const existing = store[GATE_KEY] as RateLimitGate | undefined;
+  if (existing !== undefined) return existing;
 
-function createAirRateLimitGate(): RateLimitGate {
   const policy = getRateLimitPolicy();
   const { client, setting, metrics, ephemeralSecret } = getSharedInfrastructure();
 
-  return createRateLimitGate({
+  const gate = createRateLimitGate({
     limiter: client === null ? new MemoryRateLimiter(policy) : new RedisRateLimiter({ client, policy }),
     ipTrust: detectIpTrust(process.env),
     // Keyed with the Redis token when there is one (already a secret we hold, and stable across instances,
@@ -133,4 +141,6 @@ function createAirRateLimitGate(): RateLimitGate {
     logger: consoleSafeLogger,
     metrics,
   });
+  store[GATE_KEY] = gate;
+  return gate;
 }

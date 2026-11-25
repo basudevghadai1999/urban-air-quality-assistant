@@ -1,7 +1,7 @@
 import "server-only";
 
 import { RedisError } from "@/lib/redis/errors";
-import { expectTuple, isCounter, type RedisCommandClient } from "@/lib/redis";
+import type { RedisCommandClient } from "@/lib/redis";
 
 import type { RateLimitPolicy, RateLimiter, RateLimitResult } from "./types";
 
@@ -18,11 +18,9 @@ import type { RateLimitPolicy, RateLimiter, RateLimitResult } from "./types";
  * so a client cannot keep itself blocked by retrying. Worst case is a burst of
  * up to twice the limit straddling a window boundary (a property of fixed windows).
  *
- * NOTE: this exact script (SHA-256 prefix 6900fd94840edb76) ran against a real Upstash Redis on
- * 2026-11-24 at commit e2bcac5: sequential limiting, 40 concurrent requests allowing exactly the limit,
- * expiry and per-client buckets. The reply validation added since then (expectTuple/isCounter) was
- * checked against real Upstash replies on 2026-11-25 (allow and refusal accepted, tampered replies
- * rejected). Production keys and the PTTL-repair branch were never exercised. See README "Verify the deployment".
+ * NOTE: the script is validated by review and by an emulation in the test suite; it has
+ * not been executed against a real Redis in development. Verify it once after deploying
+ * (see README "Verify the deployment").
  */
 export const RATE_LIMIT_SCRIPT = `
 local count = redis.call('INCR', KEYS[1])
@@ -64,9 +62,9 @@ export class RedisRateLimiter implements RateLimiter {
     const windowMs = this.policy.windowSeconds * 1000;
 
     const reply = await this.client.command(["EVAL", RATE_LIMIT_SCRIPT, 1, `${this.keyPrefix}${key}`, windowMs]);
-    const [count, ttlMs] = expectTuple(reply, 2);
-    // The script has just INCRed the key, so a count below 1 (or one that is not an exact integer) is not its reply.
-    if (!isCounter(count) || count < 1) throw new RedisError("protocol");
+    if (!Array.isArray(reply) || reply.length !== 2) throw new RedisError("protocol");
+    const [count, ttlMs] = reply as unknown[];
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) throw new RedisError("protocol");
     if (typeof ttlMs !== "number" || !Number.isFinite(ttlMs)) throw new RedisError("protocol");
 
     return {

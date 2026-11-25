@@ -37,14 +37,14 @@ describe("credential boundaries", () => {
     expect(byPath("lib/ai/client.ts")?.text).toMatch(/^import "server-only";/m);
   });
 
-  it.each(["lib/ai/client.ts", "lib/ai/config.ts", "lib/ai/generator.ts", "lib/ai/providerBudget.ts", "lib/ai/cache.ts", "lib/ai/service.ts", "lib/ai/defaultAiService.ts"])("marks %s server-only", (path) => {
+  it.each(["lib/ai/client.ts", "lib/ai/config.ts", "lib/ai/generator.ts", "lib/ai/budget.ts", "lib/ai/cache.ts", "lib/ai/service.ts", "lib/ai/defaultAiService.ts"])("marks %s server-only", (path) => {
     expect(byPath(path)?.text, path).toMatch(/^import "server-only";/m);
   });
 
   it("no Client Component imports an AI server module, the SDK or the env utility", () => {
     const offenders = files
       .filter(({ text }) => /^["']use client["']/m.test(text))
-      .filter(({ text }) => /from ["'](@\/lib\/ai\/(client|config|generator|providerBudget|cache|service|defaultAiService)|@google\/genai|@\/lib\/env)/.test(text))
+      .filter(({ text }) => /from ["'](@\/lib\/ai\/(client|config|generator|budget|cache|service|defaultAiService)|@google\/genai|@\/lib\/env)/.test(text))
       .map((f) => f.path);
     expect(offenders).toEqual([]);
   });

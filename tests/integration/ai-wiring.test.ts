@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { POST } from "@/app/api/recommend/route";
 import { buildFallbackExplanation } from "@/lib/ai";
-import type { RecommendApiSuccess } from "@/types/api";
+import type { RecommendApiSuccess } from "@/lib/api/recommendHandler";
 
 import { FakeRedis } from "../fixtures/fakeRedis";
 import { MORNING_DIP } from "../fixtures/engine";

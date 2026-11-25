@@ -33,19 +33,8 @@ export const CHAT_QUESTION_END = "<<<QUESTION_END>>>";
 
 const MARKERS = /<<<|>>>/g;
 
-/**
- * Remove anything that could imitate a marker, so user text cannot close its own block. Removal repeats until
- * nothing is left to remove: one pass can JOIN the characters around a removed marker into a new one
- * ("<<" + ">>>" + "<" leaves "<<<"), which is how a forged `<<<QUESTION_END>>>` would otherwise get through.
- */
-export function stripMarkers(text: string): string {
-  let current = text;
-  for (;;) {
-    const next = current.replace(MARKERS, "");
-    if (next === current) return next;
-    current = next;
-  }
-}
+/** Remove anything that could imitate a marker, so user text cannot close its own block. */
+export const stripMarkers = (text: string): string => text.replace(MARKERS, "");
 
 export interface ChatPromptTurn {
   readonly role: "user" | "assistant";

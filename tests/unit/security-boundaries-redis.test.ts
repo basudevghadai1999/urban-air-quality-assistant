@@ -52,7 +52,7 @@ describe("Redis credential boundaries", () => {
 
   it("never writes a token, header value or client address to a log call", () => {
     const logCalls = files.flatMap(({ path, text }) =>
-      [...text.matchAll(/(?:logger|consoleSafeLogger)\.warn\([^;]*?\);/gs)].map((m) => ({ path, call: m[0] })),
+      [...text.matchAll(/(?:logger|consoleSafeLogger|consoleAirLogger)\.warn\([^;]*?\);/gs)].map((m) => ({ path, call: m[0] })),
     );
     expect(logCalls.length).toBeGreaterThan(5);
     for (const { path, call } of logCalls) {

@@ -1,8 +1,6 @@
 import "server-only";
 
-import { BodyTooLargeError, readTextCapped } from "@/lib/http";
-
-import { callSignal, type ProviderRawResponse, type ProviderRequest, type ProviderTransport, type TokenUsage } from "./provider";
+import type { ProviderRawResponse, ProviderRequest, ProviderTransport, TokenUsage } from "./provider";
 
 /**
  * The only module that talks to Groq. Groq exposes an OpenAI-compatible Chat Completions endpoint, so
@@ -16,13 +14,12 @@ import { callSignal, type ProviderRawResponse, type ProviderRequest, type Provid
  *    supporting it. The shared Zod schema and validator still run afterwards.
  *  - The key travels only in the Authorization header. No header, URL or body is logged or thrown.
  *  - Errors carry the HTTP status only. The response body is never read on failure, because it can
- *    echo request content; success bodies are read through a bounded stream (`readTextCapped`).
+ *    echo request content; success bodies are size-capped.
  *  - Redirects are refused, so the Authorization header cannot be forwarded to another host.
  */
 
 export const GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions";
-/** A success body larger than this is refused while it streams: the stream is cancelled, never buffered in full. */
-export const MAX_RESPONSE_BYTES = 200_000;
+const MAX_RESPONSE_CHARS = 200_000;
 
 /** An HTTP failure from a provider. Carries the status only, never a body or a message from the provider. */
 export class ProviderHttpError extends Error {
@@ -90,25 +87,14 @@ export function createGroqTransport(apiKey: string, options: GroqTransportOption
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify(body),
-        signal: callSignal(request.timeoutMs, request.signal),
+        signal: AbortSignal.timeout(request.timeoutMs),
         redirect: "error",
         cache: "no-store",
       });
-      if (!response.ok) {
-        // Never read, but released: an unread body keeps its connection busy.
-        await response.body?.cancel().catch(() => undefined);
-        throw new ProviderHttpError(response.status);
-      }
+      if (!response.ok) throw new ProviderHttpError(response.status);
 
-      let raw: string;
-      try {
-        raw = await readTextCapped(response, MAX_RESPONSE_BYTES);
-      } catch (error) {
-        // Too large is the provider misbehaving. A timeout, a cancellation or a broken stream keeps its own
-        // error, so each is classified for what it is.
-        if (error instanceof BodyTooLargeError) throw new ProviderHttpError(502);
-        throw error;
-      }
+      const raw = await response.text();
+      if (raw.length > MAX_RESPONSE_CHARS) throw new ProviderHttpError(502);
       let payload: {
         choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
         usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };

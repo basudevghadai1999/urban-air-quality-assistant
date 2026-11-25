@@ -43,11 +43,6 @@ export const AIR_METRIC_NAMES = [
   "ai_provider_success",
   "ai_provider_failure",
   "ai_provider_fallback",
-  // A caller left while its answer was being produced (not a provider failure), and the chain ran out of time.
-  "ai_cancelled",
-  "ai_deadline_exceeded",
-  // A provider client could not be built: nothing was charged and no call was made, so it is not an `ai_provider_failure`.
-  "ai_transport_failure",
   "ai_cache_miss",
   "ai_latency_ms_total",
   "ai_tokens_input",
