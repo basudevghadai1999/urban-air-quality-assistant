@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createChatService } from "@/lib/ai/chatService";
 import { CHAT_LIMITS } from "@/lib/ai/chatTypes";
-import { handleChatRequest, MAX_BODY_BYTES, type ChatApiError, type ChatApiSuccess } from "@/lib/api/chatHandler";
+import { handleChatRequest } from "@/lib/api/chatHandler";
+import { MAX_BODY_BYTES } from "@/lib/api/common";
+import type { ChatApiError, ChatApiSuccess } from "@/types/api";
 import { MemoryCache } from "@/lib/cache";
 import { createAirService, type AirService } from "@/lib/data/airService";
 import { DEFAULT_AIR_SERVICE_CONFIG } from "@/lib/data/config";
@@ -13,6 +15,7 @@ import type { NormalizedAirData } from "@/types/air";
 import { allowGate, fakeTransport, limitedGate, memoryBudget, readyConfig } from "../fixtures/ai";
 import { MORNING_DIP } from "../fixtures/engine";
 import { FETCHED_AT_MS, makeOpenMeteoResponse } from "../fixtures/openMeteo";
+import { bytes, settle, streamedPost } from "../fixtures/streams";
 
 /** Provider data and model output are SYNTHETIC and injected; no network or quota is used. */
 
@@ -44,7 +47,7 @@ function setup(options: { reply?: string; gate?: RateLimitGate; airGate?: RateLi
       getChat: () => chat,
       ...(options.airGate === undefined ? {} : { getGate: () => options.airGate as RateLimitGate }),
     });
-  return { run, transport };
+  return { run, transport, chat };
 }
 
 const valid = { cityId: "bengaluru", profileId: "family_toddlers", message: "Is it a good time for a walk?" };
@@ -110,6 +113,27 @@ describe("POST /api/chat: input is validated and never echoed", () => {
     expect((await run(big, { "content-type": "application/json", "content-length": String(big.length) })).status).toBe(413);
     expect((await run(big, { "content-type": "application/json" })).status).toBe(413);
     expect(transport.requests).toHaveLength(0);
+  });
+
+  it("cuts off an endless chunked body that declares no length, before any model call", async () => {
+    const { transport } = setup();
+    const probe = streamedPost(() => bytes("x".repeat(1024)));
+    const res = await handleChatRequest(probe.request, airService, () => FETCHED_AT_MS, { getChat: () => ({ answer: () => Promise.reject(new Error("must not run")) }) });
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as ChatApiError).error.code).toBe("REQUEST_TOO_LARGE");
+    expect(probe.cancelled()).toBe(true);
+    expect(probe.pulls()).toBeLessThanOrEqual(MAX_BODY_BYTES / 1024 + 3);
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("accepts a valid body that arrives in several chunks", async () => {
+    const { transport, chat } = setup();
+    const data = bytes(JSON.stringify(valid));
+    const probe = streamedPost((i) => (i * 9 < data.length ? data.slice(i * 9, (i + 1) * 9) : null));
+    await settle();
+    const res = await handleChatRequest(probe.request, airService, () => FETCHED_AT_MS, { getChat: () => chat });
+    expect(res.status).toBe(200);
+    expect(transport.requests).toHaveLength(1);
   });
 
   it.each([

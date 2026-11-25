@@ -26,3 +26,21 @@ export function formatIsoWithOffset(epochMs: number, offsetSeconds: number): str
 export function ageSeconds(fromMs: number, toMs: number): number {
   return Math.max(0, Math.floor((toMs - fromMs) / 1000));
 }
+
+const DAY_MS = 86_400_000;
+
+/** `YYYYMMDD` for the UTC day containing `ms`. */
+export function utcDayKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`;
+}
+
+/** Milliseconds from `ms` to the next 00:00 UTC; a full day when `ms` is exactly midnight. */
+export function msUntilNextUtcMidnight(ms: number): number {
+  return DAY_MS - (((ms % DAY_MS) + DAY_MS) % DAY_MS);
+}
+
+/** Whole seconds until the next 00:00 UTC, at least 1. */
+export function secondsUntilUtcReset(ms: number): number {
+  return Math.max(1, Math.ceil(msUntilNextUtcMidnight(ms) / 1000));
+}

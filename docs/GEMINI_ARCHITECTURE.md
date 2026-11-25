@@ -33,7 +33,7 @@ POST /api/recommend { cityId, profileId, preferences?, explain: true }
 | `generator.ts` | One model call; maps blocks, truncation and empty replies to reason codes |
 | `validator.ts` | Post-generation checks; rejects the whole output on any failure |
 | `fallback.ts` | Deterministic explanations in the same shape |
-| `budget.ts` | Atomic global daily budget (Redis Lua, or memory in development) |
+| `providerBudget.ts` | Atomic global and per-provider daily budgets (Redis Lua, or memory in development) |
 | `cache.ts` | Validated-explanation cache (memory + Redis), re-validated on read |
 | `service.ts` | Orchestration and the cost-protection order |
 | `defaultAiService.ts` | Process-wide wiring on the shared Redis infrastructure |
@@ -145,7 +145,7 @@ Counters and rate-limited structured log lines (at most one per metric per minut
 - The full production prompt was not confirmed against live Gemini: every Flash-class model returned 503 "high demand" during testing. The SDK path, key handling and structured output were verified up to that point, and a small schema-constrained call succeeded on `gemini-3.5-flash`.
 - The validator is strict, so a real model that rounds figures or paraphrases around a negation may be rejected (fallback). The live rejection rate has not been measured.
 - The numeric check matches values, not units; the claim checks are pattern-based guards.
-- The budget script has run only against an in-process emulation of Redis, never a real Redis.
+- The budget script (SHA-256 prefix `164b61d2699a5c31`) ran against a real Upstash Redis on 2026-11-24 at commit `e2bcac5` and is byte-identical to the current script. The stricter reply validation added later was checked against real Upstash replies on 2026-11-25 (grant and refusal accepted, tampered replies rejected); the PTTL-repair branch and a real midnight cutover were never run live.
 - Per-client AI limits behind a front proxy degrade to a shared bucket (as for `/api/air`).
 - Gemini output is English only. There is no streaming; a response arrives whole.
 - The default model can be retired or overloaded by Google at any time; the layer degrades to the fallback rather than switching.

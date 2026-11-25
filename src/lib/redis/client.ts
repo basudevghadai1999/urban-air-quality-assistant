@@ -4,6 +4,7 @@ import { BodyTooLargeError, isAbortError, readTextCapped } from "@/lib/http";
 
 import type { RedisConfig } from "./config";
 import { RedisError } from "./errors";
+import { isRecord } from "./replies";
 
 /**
  * Minimal client for the Upstash Redis REST API.
@@ -93,15 +94,16 @@ export function createUpstashRestClient(
       } catch {
         throw new RedisError("protocol");
       }
-      if (typeof body !== "object" || body === null) throw new RedisError("protocol");
+      if (!isRecord(body)) throw new RedisError("protocol");
 
-      const record = body as Record<string, unknown>;
-      if (typeof record.error === "string") {
+      // An `error` member of any type means the command did not succeed, even if a `result` is also present.
+      if ("error" in body) {
         // Keep only a coarse class; the message itself can echo command arguments.
-        throw new RedisError(/^(WRONGPASS|NOAUTH)\b/.test(record.error) ? "auth" : "command");
+        if (typeof body.error !== "string") throw new RedisError("protocol");
+        throw new RedisError(/^(WRONGPASS|NOAUTH)\b/.test(body.error) ? "auth" : "command");
       }
-      if (!("result" in record)) throw new RedisError("protocol");
-      return record.result;
+      if (!("result" in body)) throw new RedisError("protocol");
+      return body.result;
     },
   };
 }

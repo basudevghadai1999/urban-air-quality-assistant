@@ -1,4 +1,3 @@
-import { BUDGET_SCRIPT } from "@/lib/ai/budget";
 import { PROVIDER_BUDGET_SCRIPT } from "@/lib/ai/providerBudget";
 import { RATE_LIMIT_SCRIPT } from "@/lib/ratelimit/redis";
 import type { RedisArg, RedisCommandClient } from "@/lib/redis";
@@ -106,25 +105,6 @@ export class FakeRedis implements RedisCommandClient {
             }
           }
           return [1, 0, g0 + 1, p0 + 1];
-        }
-        if (script === BUDGET_SCRIPT) {
-          // Same semantics as the Lua source: INCR, PEXPIRE on first use (and to heal), DECR when over the limit.
-          const limit = Number(rest[3]);
-          const ttlMs = Number(rest[4]);
-          const budgetKey = String(key);
-          const entry = this.live(budgetKey);
-          const used = Number(entry?.value ?? 0) + 1;
-          if (entry === undefined) this.entries.set(budgetKey, { value: String(used), expiresAtMs: this.now() + ttlMs });
-          else {
-            entry.value = String(used);
-            if (entry.expiresAtMs === null) entry.expiresAtMs = this.now() + ttlMs;
-          }
-          if (used > limit) {
-            const current = this.live(budgetKey);
-            if (current !== undefined) current.value = String(used - 1);
-            return [0, limit];
-          }
-          return [1, used];
         }
         if (script !== RATE_LIMIT_SCRIPT) throw new RedisError("command");
         const redisKey = String(key);

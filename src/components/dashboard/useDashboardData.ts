@@ -101,7 +101,7 @@ export function useDashboardData(cityId: CityId, profileId: ProfileId): Dashboar
           value:
             envelope !== null
               ? { status: "done", envelope }
-              : { status: "error", failure: outcome.ok ? { kind: "server", message: "The explanation could not be loaded.", retryAfterSeconds: null } : outcome.failure },
+              : { status: "error", failure: outcome.ok ? { kind: "server", message: "The explanation could not be loaded.", retryAfterSeconds: null, cause: "invalid-response" } : outcome.failure },
         });
       })
       .catch(() => undefined);

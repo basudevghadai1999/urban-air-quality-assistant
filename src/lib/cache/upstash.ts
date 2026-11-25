@@ -2,7 +2,7 @@ import "server-only";
 
 import { noopMetrics, type AirMetrics } from "@/lib/observability/metrics";
 import { silentLogger, type SafeLogger } from "@/lib/observability/logger";
-import type { RedisCommandClient } from "@/lib/redis";
+import { expectDeleted, expectOk, type RedisCommandClient } from "@/lib/redis";
 import type { NormalizedAirData } from "@/types/air";
 
 import { SNAPSHOT_FORMAT_VERSION, parseStoredSnapshot } from "./snapshotSchema";
@@ -73,7 +73,8 @@ export class UpstashCache implements CacheAdapter<NormalizedAirData> {
     const redisKey = this.redisKey(key);
     const raw = await this.client.command(["GET", redisKey]);
     if (raw === null) return null;
-    if (typeof raw !== "string") return this.discard(key, redisKey, "invalid-schema");
+    // Anything but a bounded string (a number, an array, a huge value) is not an entry this cache wrote.
+    if (typeof raw !== "string" || raw.length > MAX_ENTRY_CHARS) return this.discard(key, redisKey, "invalid-schema");
 
     const parsed = parseStoredSnapshot(raw);
     if (!parsed.ok) return this.discard(key, redisKey, parsed.reason);
@@ -97,11 +98,12 @@ export class UpstashCache implements CacheAdapter<NormalizedAirData> {
     }
     const payload = JSON.stringify({ v: SNAPSHOT_FORMAT_VERSION, storedAtMs: entry.storedAtMs, value });
     if (payload.length > MAX_ENTRY_CHARS) throw new RangeError("snapshot too large to cache");
-    await this.client.command(["SET", redisKey, payload, "EX", this.retentionSeconds]);
+    // "OK" or nothing: a reply that is not "OK" did not store the snapshot, so it must not count as a success.
+    expectOk(await this.client.command(["SET", redisKey, payload, "EX", this.retentionSeconds]));
   }
 
   async delete(key: string): Promise<void> {
-    await this.client.command(["DEL", this.redisKey(key)]);
+    expectDeleted(await this.client.command(["DEL", this.redisKey(key)]));
   }
 
   private async discard(key: string, redisKey: string, reason: "corrupt-json" | "invalid-schema"): Promise<null> {

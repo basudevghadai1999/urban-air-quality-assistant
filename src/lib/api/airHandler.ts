@@ -1,8 +1,10 @@
 import { z } from "zod";
 
 import { CITY_IDS } from "@/config/cities";
-import { consoleAirLogger, remainingFreshSeconds, type AirService } from "@/lib/data/airService";
-import type { GateDecision, RateLimitGate } from "@/lib/ratelimit/gate";
+import { applyRateLimit, errorResponse, JSON_HEADERS, unavailableRetryAfterSeconds } from "@/lib/api/common";
+import { remainingFreshSeconds, type AirService } from "@/lib/data/airService";
+import { consoleSafeLogger } from "@/lib/observability/logger";
+import type { RateLimitGate } from "@/lib/ratelimit/gate";
 import type { AirApiError, AirApiErrorCode, AirApiSuccess } from "@/types/air";
 
 /**
@@ -29,54 +31,12 @@ import type { AirApiError, AirApiErrorCode, AirApiSuccess } from "@/types/air";
 
 /** A valid request URL is under 100 characters; this bounds anything abusive. */
 const MAX_URL_LENGTH = 512;
-const UNAVAILABLE_RETRY_AFTER_SECONDS = 60;
-const LIMITER_UNAVAILABLE_RETRY_AFTER_SECONDS = 30;
 
 const cityIdSchema = z.enum(CITY_IDS);
-
-const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" } as const;
 
 export interface AirHandlerOptions {
   /** Builds the rate-limit gate. Omitted: no rate limiting (unit tests of the rest of the handler). */
   readonly getGate?: () => RateLimitGate;
-}
-
-function errorResponse(
-  status: number,
-  code: AirApiErrorCode,
-  message: string,
-  extra: {
-    validCityIds?: readonly string[];
-    retryAfterSeconds?: number;
-    headers?: Record<string, string>;
-  } = {},
-): Response {
-  const body: AirApiError = {
-    ok: false,
-    error: {
-      code,
-      message,
-      ...(extra.validCityIds === undefined ? {} : { validCityIds: extra.validCityIds }),
-      ...(extra.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: extra.retryAfterSeconds }),
-    },
-  };
-  return Response.json(body, {
-    status,
-    headers: { ...JSON_HEADERS, "Cache-Control": "no-store", ...extra.headers },
-  });
-}
-
-export function rateLimitedResponse(decision: Extract<GateDecision, { kind: "limited" }>): Response {
-  const { result, retryAfterSeconds } = decision;
-  return errorResponse(429, "RATE_LIMITED", "Too many requests. Please wait before trying again.", {
-    retryAfterSeconds,
-    headers: {
-      "Retry-After": String(retryAfterSeconds),
-      "RateLimit-Limit": String(result.limit),
-      "RateLimit-Remaining": "0",
-      "RateLimit-Reset": String(result.resetSeconds),
-    },
-  });
 }
 
 export async function handleAirRequest(
@@ -116,18 +76,14 @@ export async function handleAirRequest(
   }
   const cityId = parsed.data;
 
-  let decision: GateDecision | null = null;
-  if (options.getGate !== undefined) {
-    try {
-      decision = await options.getGate()(request);
-    } catch {
-      // Misconfiguration (for example an invalid rate-limit setting): refuse rather than run unprotected.
-      consoleAirLogger.warn("air.rate_limit_gate_failed", { cityId });
-      return errorResponse(500, "INTERNAL_ERROR", "The air quality service hit an unexpected problem.");
-    }
-    if (decision.kind === "limited") return rateLimitedResponse(decision);
-  }
-  const degraded = decision?.kind === "degraded";
+  const gate = await applyRateLimit(request, options.getGate, {
+    event: "air.rate_limit_gate_failed",
+    cityId,
+    // Misconfiguration (for example an invalid rate-limit setting): refuse rather than run unprotected.
+    response: () => errorResponse(500, "INTERNAL_ERROR", "The air quality service hit an unexpected problem."),
+  });
+  if (gate.kind === "blocked") return gate.response;
+  const { degraded } = gate;
 
   let data;
   try {
@@ -135,13 +91,13 @@ export async function handleAirRequest(
   } catch {
     // Reaching here means a bug or bad server configuration, not a provider problem
     // (those are absorbed by the service). Log the class only; reveal nothing.
-    consoleAirLogger.warn("air.route_failed", { cityId });
+    consoleSafeLogger.warn("air.route_failed", { cityId });
     return errorResponse(500, "INTERNAL_ERROR", "The air quality service hit an unexpected problem.");
   }
 
   if (data.freshnessStatus === "unavailable") {
     const code: AirApiErrorCode = degraded ? "RATE_LIMITING_UNAVAILABLE" : "AIR_DATA_UNAVAILABLE";
-    const retryAfter = degraded ? LIMITER_UNAVAILABLE_RETRY_AFTER_SECONDS : UNAVAILABLE_RETRY_AFTER_SECONDS;
+    const retryAfter = unavailableRetryAfterSeconds(degraded);
     const body: AirApiError = {
       ok: false,
       error: {

@@ -7,4 +7,5 @@ export {
   type RedisFetch,
   type RestClientOptions,
 } from "./client";
+export { expectDeleted, expectOk, expectTuple, isCounter, isRecord } from "./replies";
 export { RedisError, isRedisError, type RedisErrorKind } from "./errors";

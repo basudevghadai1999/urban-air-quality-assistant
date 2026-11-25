@@ -1,3 +1,6 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { classifyProviderError } from "@/lib/ai/errors";
@@ -157,5 +160,208 @@ describe("failures carry a status only", () => {
     const f = fakeFetch(() => new Response("", { status: 503 }));
     await createGroqTransport(KEY, { fetchImpl: f.fn }).generate(request).catch(() => undefined);
     expect(f.calls).toHaveLength(1);
+  });
+});
+
+describe("bounded body and cancellation", () => {
+  const LIMIT = 200_000;
+  /** A 200 OK whose body arrives in the given chunks, optionally ending in an error. */
+  function streamed(chunks: Uint8Array[], options: { failWith?: Error; headers?: Record<string, string>; pulls?: { n: number } } = {}) {
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (options.pulls) options.pulls.n += 1;
+        const chunk = chunks[i++];
+        if (chunk !== undefined) controller.enqueue(chunk);
+        else if (options.failWith) controller.error(options.failWith);
+        else controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: options.headers });
+  }
+  const enc = (s: string) => new TextEncoder().encode(s);
+  /** A valid completion padded to exactly `bytes` bytes. */
+  function completionOfSize(bytes: number): string {
+    const base = JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "stop" }], pad: "" });
+    return base.replace('"pad":""', `"pad":"${"a".repeat(bytes - base.length)}"`);
+  }
+  const run = (response: () => Response, extra: { signal?: AbortSignal; timeoutMs?: number } = {}) =>
+    createGroqTransport(KEY, { fetchImpl: (() => Promise.resolve(response())) as unknown as typeof fetch }).generate({ ...request, ...extra });
+  const errorOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as Error);
+
+  it("accepts a body exactly at the limit and refuses one a byte over", async () => {
+    const atLimit = completionOfSize(LIMIT);
+    expect(enc(atLimit).byteLength).toBe(LIMIT);
+    expect((await run(() => new Response(atLimit, { status: 200 }))).finishReason).toBe("stop");
+
+    const over = await errorOf(run(() => new Response(completionOfSize(LIMIT + 1), { status: 200 })));
+    expect(over).toBeInstanceOf(ProviderHttpError);
+    expect(classifyProviderError(over)).toBe("AI_UPSTREAM_ERROR");
+  });
+
+  it("reads a chunked body, including a multibyte character split across chunks", async () => {
+    const full = enc(JSON.stringify({ choices: [{ message: { content: "Air is café-clean today ✓" }, finish_reason: "stop" }] }));
+    const cut = full.indexOf(0xc3) + 1; // between the two bytes of "é"
+    const out = await run(() => streamed([full.slice(0, cut), full.slice(cut, cut + 7), full.slice(cut + 7)]));
+    expect(out.text).toBe("Air is café-clean today ✓");
+  });
+
+  it("counts BYTES, not characters: multibyte text over the limit is refused", async () => {
+    const text = "é".repeat(LIMIT / 2 + 1); // 100,001 characters, 200,002 bytes
+    expect(text.length).toBeLessThan(LIMIT);
+    const err = await errorOf(run(() => new Response(`{"x":"${text}"}`, { status: 200 })));
+    expect(err).toBeInstanceOf(ProviderHttpError);
+  });
+
+  it("stops reading and cancels the stream once the limit is passed (no unbounded buffering)", async () => {
+    const pulls = { n: 0 };
+    const chunk = new Uint8Array(50_000).fill(97);
+    const many = Array.from({ length: 100 }, () => chunk); // 5 MB on offer
+    const err = await errorOf(run(() => streamed(many, { pulls })));
+    expect(err).toBeInstanceOf(ProviderHttpError);
+    expect(pulls.n).toBeLessThan(10); // read about 4 chunks, not all 100
+  });
+
+  it("refuses by a declared Content-Length without reading, and ignores a missing or invalid one while streaming", async () => {
+    const pulls = { n: 0 };
+    const declared = await errorOf(run(() => streamed([enc("{}")], { headers: { "content-length": String(LIMIT + 1) }, pulls })));
+    expect(declared).toBeInstanceOf(ProviderHttpError);
+    expect(pulls.n).toBeLessThanOrEqual(1); // at most the platform's own one-chunk prefill: nothing was consumed
+
+    const good = JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    expect((await run(() => streamed([enc(good)], { headers: { "content-length": "not-a-number" } }))).text).toBe("ok");
+    expect((await run(() => streamed([enc(good)]))).text).toBe("ok");
+    // A false small length does not let a large body through: the stream is still counted.
+    const lie = await errorOf(run(() => streamed([new Uint8Array(LIMIT + 10).fill(97)], { headers: { "content-length": "5" } })));
+    expect(lie).toBeInstanceOf(ProviderHttpError);
+  });
+
+  it("a stream that breaks keeps its own error (a network failure), distinct from 'too large'", async () => {
+    const err = await errorOf(run(() => streamed([enc('{"choices":')], { failWith: new TypeError("terminated") })));
+    expect(err).not.toBeInstanceOf(ProviderHttpError);
+    expect(classifyProviderError(err)).toBe("AI_NETWORK");
+  });
+
+  it("sends the caller's signal with the request, and aborts when the caller leaves", async () => {
+    const caller = new AbortController();
+    const f = fakeFetch(() => completion("{}"));
+    await createGroqTransport(KEY, { fetchImpl: f.fn }).generate({ ...request, signal: caller.signal });
+    const sent = f.calls[0]?.init.signal as AbortSignal;
+    expect(sent.aborted).toBe(false);
+    caller.abort();
+    expect(sent.aborted).toBe(true);
+
+    const gone = new AbortController();
+    gone.abort();
+    const fetchImpl = ((_u: string, init: RequestInit) => (init.signal?.aborted ? Promise.reject(init.signal.reason) : Promise.resolve(completion("{}")))) as unknown as typeof fetch;
+    const err = await errorOf(createGroqTransport(KEY, { fetchImpl }).generate({ ...request, signal: gone.signal }));
+    expect(err?.name).toBe("AbortError");
+  });
+
+  it("tells a timeout from a caller's cancellation by the signal's reason", async () => {
+    const outcome = async (caller?: AbortController) => {
+      const fetchImpl = ((_u: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          caller?.abort();
+        })) as unknown as typeof fetch;
+      return errorOf(createGroqTransport(KEY, { fetchImpl }).generate({ ...request, timeoutMs: 20, ...(caller === undefined ? {} : { signal: caller.signal }) }));
+    };
+    const timedOut = await outcome();
+    expect(timedOut?.name).toBe("TimeoutError");
+    expect(classifyProviderError(timedOut)).toBe("AI_TIMEOUT");
+
+    const caller = new AbortController();
+    const cancelled = await outcome(caller);
+    expect(cancelled?.name).toBe("AbortError"); // not a TimeoutError: the caller's own signal says which it was
+    expect(caller.signal.aborted).toBe(true);
+  });
+
+  it("a body read that is aborted mid-stream rejects with the abort, not a partial answer", async () => {
+    const caller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc('{"choices":'));
+        caller.signal.addEventListener("abort", () => controller.error(caller.signal.reason));
+      },
+    });
+    const pending = errorOf(run(() => new Response(body, { status: 200 })));
+    setTimeout(() => caller.abort(), 5);
+    expect((await pending)?.name).toBe("AbortError");
+  });
+});
+
+describe("against a real local HTTP server (the real fetch, no network beyond loopback)", () => {
+  type Handler = (req: IncomingMessage, res: ServerResponse) => void;
+  async function serve(handler: Handler) {
+    const server = createServer(handler);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    return { url: `http://127.0.0.1:${port}/v1`, close: () => new Promise<void>((resolve) => server.close(() => resolve())), server };
+  }
+  const errorOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as Error);
+  const until = async (cond: () => boolean, ms = 2_000) => {
+    const start = Date.now();
+    while (!cond() && Date.now() - start < ms) await new Promise((r) => setTimeout(r, 10));
+    return cond();
+  };
+
+  it("a body that stalls after the headers is cut off at the call's timeout, as a timeout", async () => {
+    const s = await serve((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"choices":'); // then nothing, and the connection stays open
+    });
+    try {
+      const started = Date.now();
+      const err = await errorOf(createGroqTransport(KEY, { url: s.url }).generate({ ...request, timeoutMs: 150 }));
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(classifyProviderError(err)).toBe("AI_TIMEOUT");
+    } finally {
+      s.server.closeAllConnections();
+      await s.close();
+    }
+  });
+
+  it("an endless body is refused at the limit within moments, and the connection is released", async () => {
+    let closed = false;
+    let sent = 0;
+    const s = await serve((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      req.socket.on("close", () => (closed = true));
+      const chunk = Buffer.alloc(32_768, 97);
+      const pump = () => {
+        while (!closed && res.write(chunk)) sent += chunk.length;
+        if (!closed) res.once("drain", pump);
+      };
+      pump();
+    });
+    try {
+      const started = Date.now();
+      const err = await errorOf(createGroqTransport(KEY, { url: s.url }).generate({ ...request, timeoutMs: 10_000 }));
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(err).toBeInstanceOf(ProviderHttpError);
+      expect(await until(() => closed)).toBe(true); // the reader was cancelled: the server sees the connection go
+      expect(sent).toBeLessThan(5_000_000); // a few buffers of kernel/stream slack, nowhere near an unbounded read
+    } finally {
+      s.server.closeAllConnections();
+      await s.close();
+    }
+  });
+
+  it("an error response's body is released unread", async () => {
+    let closed = false;
+    const s = await serve((req, res) => {
+      res.writeHead(503, { "Content-Type": "text/plain" });
+      req.socket.on("close", () => (closed = true));
+      res.write("RAW provider text"); // never ended
+    });
+    try {
+      const err = await errorOf(createGroqTransport(KEY, { url: s.url }).generate(request));
+      expect(classifyProviderError(err)).toBe("AI_UPSTREAM_ERROR");
+      expect(await until(() => closed)).toBe(true);
+    } finally {
+      s.server.closeAllConnections();
+      await s.close();
+    }
   });
 });

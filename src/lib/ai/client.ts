@@ -12,13 +12,16 @@ import { GoogleGenAI } from "@google/genai";
  *  - Retries: the SDK can retry with exponential backoff, and its default attempt count is 5 when
  *    retry options are supplied. We pin `attempts: 1`, so exactly one request is ever made per
  *    call; whether to try again is the cost policy's decision, and the answer is no.
- *  - Timeouts: `httpOptions.timeout` bounds each attempt; an `AbortSignal` is a second guard.
+ *  - Timeouts and cancellation: `httpOptions.timeout` bounds each attempt, and the SDK also aborts the request
+ *    and its body read when `abortSignal` fires (verified in the installed package). That signal carries the
+ *    timeout (a second guard) and, for a caller that can leave, the caller's own signal. The SDK aborts with a
+ *    plain AbortError either way, so a caller tells "I cancelled" from "it timed out" by its own signal.
  *  - Errors: the SDK's `ApiError` message can embed the provider's response text. Callers classify
  *    by status only (`classifyGeminiError`) and discard the message.
  *  - Structured output: `responseMimeType: "application/json"` with `responseJsonSchema`.
  */
 
-import type { ProviderRawResponse, ProviderRequest, ProviderTransport, TokenUsage } from "./provider";
+import { callSignal, type ProviderRawResponse, type ProviderRequest, type ProviderTransport, type TokenUsage } from "./provider";
 
 /** Kept for existing imports: the Gemini request and response are the provider-neutral ones. */
 export type GeminiRequest = ProviderRequest;
@@ -40,7 +43,7 @@ export function createGeminiTransport(apiKey: string): ProviderTransport {
           temperature: request.temperature,
           candidateCount: 1,
           ...(request.thinkingBudget === null ? {} : { thinkingConfig: { thinkingBudget: request.thinkingBudget } }),
-          abortSignal: AbortSignal.timeout(request.timeoutMs + 2_000),
+          abortSignal: callSignal(request.timeoutMs, request.signal, 2_000),
           httpOptions: { timeout: request.timeoutMs, retryOptions: { attempts: 1 } },
         },
       });

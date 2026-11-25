@@ -1,5 +1,6 @@
 import { getCityById, type City, type CityId } from "@/config/cities";
 import type { CacheAdapter, CacheEntry } from "@/lib/cache";
+import type { SafeLogger } from "@/lib/observability/logger";
 import { noopMetrics, type AirMetrics } from "@/lib/observability/metrics";
 import { ageSeconds } from "@/lib/time";
 import type { CacheCapability, NormalizedAirData } from "@/types/air";
@@ -31,9 +32,8 @@ import { isOpenMeteoError } from "./openMeteo/errors";
  * All collaborators are injected, so tests need no network, clock or globals.
  */
 
-export interface AirLogger {
-  warn(event: string, fields: Readonly<Record<string, string | number | undefined>>): void;
-}
+/** The shared safe logger: one JSON line per event, fields restricted to non-sensitive scalars. */
+export type AirLogger = SafeLogger;
 
 export type AirFetcher = (cityId: string, options: FetchOptions) => Promise<OpenMeteoResponse>;
 
@@ -60,13 +60,6 @@ export interface AirRequestOptions {
 export interface AirService {
   getAirData(cityId: CityId, options?: AirRequestOptions): Promise<NormalizedAirData>;
 }
-
-/** Writes one JSON line per event. Fields are restricted to non-sensitive scalars by the type. */
-export const consoleAirLogger: AirLogger = {
-  warn(event, fields) {
-    console.warn(JSON.stringify({ level: "warn", event, ...fields }));
-  },
-};
 
 export function createAirService(deps: AirServiceDeps): AirService {
   const { config, cache, now, fetcher, logger } = deps;

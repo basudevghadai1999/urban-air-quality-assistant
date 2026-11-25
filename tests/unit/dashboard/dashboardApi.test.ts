@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fetchAir, fetchRecommendations } from "@/lib/client/dashboardApi";
 
-import { installApi, recommendFor, unavailableAir } from "../../fixtures/dashboard";
+import { envelopeFor, installApi, recommendFor, unavailableAir } from "../../fixtures/dashboard";
 
 afterEach(() => vi.unstubAllGlobals());
 const signal = () => new AbortController().signal;
@@ -36,11 +36,11 @@ describe("dashboard API client", () => {
   });
 
   it.each([
-    [429, { error: { code: "RATE_LIMITED", retryAfterSeconds: 30 } }, "rate-limited", 30],
-    [503, { error: { code: "AIR_DATA_UNAVAILABLE", retryAfterSeconds: 60 } }, "unavailable", 60],
-    [503, { error: { code: "RATE_LIMITING_UNAVAILABLE" } }, "unavailable", null],
-    [500, { error: { code: "INTERNAL_ERROR" } }, "server", null],
-    [400, { error: { code: "INVALID_REQUEST" } }, "server", null],
+    [429, { ok: false, error: { code: "RATE_LIMITED", message: "x", retryAfterSeconds: 30 } }, "rate-limited", 30],
+    [503, { ok: false, error: { code: "AIR_DATA_UNAVAILABLE", message: "x", retryAfterSeconds: 60 } }, "unavailable", 60],
+    [503, { ok: false, error: { code: "RATE_LIMITING_UNAVAILABLE", message: "x" } }, "unavailable", null],
+    [500, { ok: false, error: { code: "INTERNAL_ERROR", message: "x" } }, "server", null],
+    [400, { ok: false, error: { code: "INVALID_REQUEST", message: "x" } }, "server", null],
     [200, { ok: false }, "server", null],
   ] as const)("classifies HTTP %i as %s", async (status, body, kind, retry) => {
     installApi({ air: () => ({ status, body }), recommend: () => ({ status, body }) });
@@ -61,16 +61,17 @@ describe("dashboard API client", () => {
 
   it("keeps the explicit unavailable state that the server sends with a 503", async () => {
     const air = unavailableAir();
-    installApi({ air: () => ({ status: 503, body: { ok: false, error: { code: "AIR_DATA_UNAVAILABLE" }, data: air } }) });
+    installApi({ air: () => ({ status: 503, body: { ok: false, error: { code: "AIR_DATA_UNAVAILABLE", message: "x" }, data: air } }) });
     const out = await fetchAir("delhi-ncr", signal());
     expect(!out.ok && out.data?.freshnessStatus).toBe("unavailable");
   });
 
   it("keeps the AI envelope that travels with a failed recommendation response", async () => {
     const result = recommendFor(unavailableAir());
-    installApi({ recommend: () => ({ status: 503, body: { ok: false, error: { code: "AIR_DATA_UNAVAILABLE" }, data: result, ai: { status: "unavailable" } } }) });
+    const ai = envelopeFor(result, "unavailable");
+    installApi({ recommend: () => ({ status: 503, body: { ok: false, error: { code: "AIR_DATA_UNAVAILABLE", message: "x" }, data: result, ai } }) });
     const out = await fetchRecommendations("delhi-ncr", "family_toddlers", true, signal());
-    expect(!out.ok && out.data?.ai).toEqual({ status: "unavailable" });
+    expect(!out.ok && out.data?.ai).toEqual(ai);
   });
 
   it("reports a network failure, and a non-JSON body as a server failure", async () => {

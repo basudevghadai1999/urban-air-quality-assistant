@@ -1,10 +1,10 @@
 import "server-only";
 
 import type { AiProviderId } from "@/lib/env";
-import type { RedisCommandClient } from "@/lib/redis";
+import { expectTuple, isCounter, type RedisCommandClient } from "@/lib/redis";
 import { RedisError } from "@/lib/redis/errors";
 
-import { DEFAULT_BUDGET_KEY_PREFIX, msUntilNextUtcMidnight, utcDayKey } from "./budget";
+import { msUntilNextUtcMidnight, secondsUntilUtcReset, utcDayKey } from "@/lib/time";
 
 /**
  * Daily budgets across providers: a GLOBAL cap on provider calls plus a cap PER provider.
@@ -37,6 +37,9 @@ if redis.call('PTTL', KEYS[2]) < 0 then redis.call('PEXPIRE', KEYS[2], ARGV[3]) 
 return {1, 0, g, p}
 `.trim();
 
+/** Global counter key prefix. Unchanged from the single-provider budget, so a version switch does not reset the day. */
+export const DEFAULT_BUDGET_KEY_PREFIX = "ai:v1:budget:";
+/** The key outlives its day so a late request never recreates yesterday's counter. */
 const TTL_GRACE_MS = 3_600_000;
 
 export interface ProviderBudgetLimits {
@@ -56,8 +59,6 @@ export interface ProviderReservation {
 export interface ProviderBudget {
   reserve(provider: AiProviderId): Promise<ProviderReservation>;
 }
-
-const secondsUntilReset = (ms: number): number => Math.max(1, Math.ceil(msUntilNextUtcMidnight(ms) / 1000));
 
 export interface RedisProviderBudgetOptions {
   readonly client: RedisCommandClient;
@@ -90,18 +91,19 @@ export class RedisProviderBudget implements ProviderBudget {
       limits.providers[provider],
       ttlMs,
     ]);
-    if (!Array.isArray(reply) || reply.length !== 4) throw new RedisError("protocol");
-    const [allowed, denied, usedGlobal, usedProvider] = reply as unknown[];
-    const validCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
-    if ((allowed !== 0 && allowed !== 1) || (denied !== 0 && denied !== 1 && denied !== 2) || !validCount(usedGlobal) || !validCount(usedProvider)) {
-      throw new RedisError("protocol");
-    }
+    const [allowed, denied, usedGlobal, usedProvider] = expectTuple(reply, 4);
+    if (!isCounter(usedGlobal) || !isCounter(usedProvider)) throw new RedisError("protocol");
+    // Only the script's two shapes are accepted: {1, 0, g, p} (charged) and {0, 1|2, g, p} (refused). Anything
+    // else (such as {0, 0, ...}) is not guessed at: a refusal with no reason, or a grant that names one, is invalid.
+    const granted = allowed === 1 && denied === 0 && usedGlobal >= 1 && usedProvider >= 1 && usedGlobal <= limits.global && usedProvider <= limits.providers[provider];
+    const refused = allowed === 0 && (denied === 1 || denied === 2);
+    if (!granted && !refused) throw new RedisError("protocol");
     return {
       allowed: allowed === 1,
       deniedBy: allowed === 1 ? null : denied === 1 ? "global" : "provider",
       usedGlobal,
       usedProvider,
-      resetsInSeconds: secondsUntilReset(nowMs),
+      resetsInSeconds: secondsUntilUtcReset(nowMs),
     };
   }
 }
@@ -126,7 +128,7 @@ export class MemoryProviderBudget implements ProviderBudget {
       this.perProvider.clear();
     }
     const used = this.perProvider.get(provider) ?? 0;
-    const resetsInSeconds = secondsUntilReset(nowMs);
+    const resetsInSeconds = secondsUntilUtcReset(nowMs);
     if (this.global >= this.limits.global) {
       return Promise.resolve({ allowed: false, deniedBy: "global", usedGlobal: this.global, usedProvider: used, resetsInSeconds });
     }

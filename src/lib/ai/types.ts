@@ -1,7 +1,7 @@
 import type { AiReasonCode } from "./errors";
 
 /**
- * Public contract of the Gemini explanation layer. Client-safe (types only).
+ * Public contract of the Gemini explanation layer. Client-safe (types and enum lists only).
  *
  * The explanation is PROSE ONLY. Every number, time, ID and estimate in the response comes from the
  * deterministic result next to it, which this layer never modifies.
@@ -36,10 +36,12 @@ export interface AiExplanation {
  *
  * Render every string in `explanation` as PLAIN TEXT.
  */
-export type AiStatus = "generated" | "cached" | "fallback" | "unavailable";
+export const AI_STATUSES = ["generated", "cached", "fallback", "unavailable"] as const;
+export type AiStatus = (typeof AI_STATUSES)[number];
 
 /** Who wrote the explanation: a model provider, or the deterministic templates. */
-export type AiProviderName = "gemini" | "groq" | "deterministic";
+export const AI_PROVIDER_NAMES = ["gemini", "groq", "deterministic"] as const;
+export type AiProviderName = (typeof AI_PROVIDER_NAMES)[number];
 
 /** One provider that was tried (or skipped) before the result, with a sanitized reason code. */
 export interface AiAttempt {

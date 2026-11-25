@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MemoryCache } from "@/lib/cache";
 import { buildGroundingContext } from "@/lib/ai";
-import { handleRecommendRequest, type RecommendApiError, type RecommendApiSuccess } from "@/lib/api/recommendHandler";
+import { handleRecommendRequest } from "@/lib/api/recommendHandler";
+import type { RecommendApiError, RecommendApiSuccess } from "@/types/api";
 import { createAirService, type AirFetcher, type AirService } from "@/lib/data/airService";
 import { DEFAULT_AIR_SERVICE_CONFIG } from "@/lib/data/config";
 import { OpenMeteoError } from "@/lib/data/openMeteo/errors";

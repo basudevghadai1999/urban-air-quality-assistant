@@ -89,7 +89,7 @@ export function useChat(cityId: CityId, profileId: ProfileId): ChatState {
                 id: nextId.current++,
                 role: "assistant",
                 kind: "error",
-                failure: outcome.ok ? { kind: "server", message: outcome.chat.message, retryAfterSeconds: outcome.chat.retryAfterSeconds ?? null } : outcome.failure,
+                failure: outcome.ok ? { kind: "server", message: outcome.chat.message, retryAfterSeconds: outcome.chat.retryAfterSeconds ?? null, cause: "service" } : outcome.failure,
                 text: outcome.ok ? outcome.chat.message : errorText(outcome.failure),
               };
           setState((s) => (s.key === key ? { key, messages: [...s.messages, reply], pending: false } : s));

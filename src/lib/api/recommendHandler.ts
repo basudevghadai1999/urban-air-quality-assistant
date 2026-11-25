@@ -2,12 +2,14 @@ import type { AiEnvelope } from "@/lib/ai/types";
 import type { ExplanationService } from "@/lib/ai/service";
 import { AI_REASON_MESSAGES } from "@/lib/ai/errors";
 import { PROMPT_VERSION } from "@/lib/ai/prompt";
-import { consoleAirLogger, type AirService } from "@/lib/data/airService";
+import type { AirService } from "@/lib/data/airService";
+import { consoleSafeLogger } from "@/lib/observability/logger";
 import { describeIssues, generateRecommendations, recommendRequestSchema, type RecommendationResult } from "@/lib/engine";
-import type { GateDecision, RateLimitGate } from "@/lib/ratelimit/gate";
+import type { RateLimitGate } from "@/lib/ratelimit/gate";
+import type { ApiIssue, RecommendApiError, RecommendApiErrorCode, RecommendApiSuccess } from "@/types/api";
 import type { NormalizedAirData } from "@/types/air";
 
-import { rateLimitedResponse } from "./airHandler";
+import { applyRateLimit, errorResponse, JSON_HEADERS, readJsonBody, unavailableRetryAfterSeconds } from "./common";
 
 /**
  * Request handling for POST /api/recommend. Thin by design: validate, rate-limit, fetch air data
@@ -25,38 +27,6 @@ import { rateLimitedResponse } from "./airHandler";
  * air-dependent sections are explicitly unavailable.
  */
 
-export const MAX_BODY_BYTES = 8 * 1024;
-
-export type RecommendApiErrorCode =
-  | "UNSUPPORTED_MEDIA_TYPE"
-  | "REQUEST_TOO_LARGE"
-  | "INVALID_JSON"
-  | "INVALID_REQUEST"
-  | "RATE_LIMITED"
-  | "RATE_LIMITING_UNAVAILABLE"
-  | "AIR_DATA_UNAVAILABLE"
-  | "INTERNAL_ERROR";
-
-export interface RecommendApiSuccess {
-  readonly ok: true;
-  readonly data: RecommendationResult;
-  /** Present only when the request set `explain: true`. Prose only: every number lives in `data`. */
-  readonly ai?: AiEnvelope;
-}
-
-export interface RecommendApiError {
-  readonly ok: false;
-  readonly error: {
-    readonly code: RecommendApiErrorCode;
-    readonly message: string;
-    readonly issues?: readonly { readonly path: string; readonly message: string }[];
-    readonly retryAfterSeconds?: number;
-  };
-  /** Present for AIR_DATA_UNAVAILABLE and RATE_LIMITING_UNAVAILABLE: the engine's explicit unavailable result. */
-  readonly data?: RecommendationResult;
-  readonly ai?: AiEnvelope;
-}
-
 export interface RecommendHandlerOptions {
   /** Builds the rate-limit gate. Omitted: no rate limiting (unit tests only). */
   readonly getGate?: () => RateLimitGate;
@@ -64,41 +34,13 @@ export interface RecommendHandlerOptions {
   readonly getExplainer?: () => ExplanationService;
 }
 
-const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } as const;
-
 function fail(
   status: number,
   code: RecommendApiErrorCode,
   message: string,
-  extra: { issues?: RecommendApiError["error"]["issues"]; retryAfterSeconds?: number; headers?: Record<string, string> } = {},
+  extra: { issues?: readonly ApiIssue[]; retryAfterSeconds?: number; headers?: Record<string, string> } = {},
 ): Response {
-  const body: RecommendApiError = {
-    ok: false,
-    error: {
-      code,
-      message,
-      ...(extra.issues === undefined ? {} : { issues: extra.issues }),
-      ...(extra.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: extra.retryAfterSeconds }),
-    },
-  };
-  return Response.json(body, { status, headers: { ...JSON_HEADERS, ...extra.headers } });
-}
-
-async function readBody(request: Request): Promise<{ ok: true; text: string } | { ok: false; response: Response }> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-    return { ok: false, response: fail(413, "REQUEST_TOO_LARGE", "The request body is too large.") };
-  }
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
-    return { ok: false, response: fail(400, "INVALID_JSON", "The request body could not be read.") };
-  }
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
-    return { ok: false, response: fail(413, "REQUEST_TOO_LARGE", "The request body is too large.") };
-  }
-  return { ok: true, text };
+  return errorResponse(status, code, message, extra);
 }
 
 /** The explanation layer never throws; this guards the wiring anyway so a bug there cannot lose the deterministic result. */
@@ -122,7 +64,7 @@ async function explainResult(
   try {
     return await getExplainer().explain({ request, result, air });
   } catch {
-    consoleAirLogger.warn("recommend.explainer_failed", { cityId: result.cityId });
+    consoleSafeLogger.warn("recommend.explainer_failed", { cityId: result.cityId });
     return unavailable();
   }
 }
@@ -133,20 +75,9 @@ export async function handleRecommendRequest(
   now: () => number = () => Date.now(),
   options: RecommendHandlerOptions = {},
 ): Promise<Response> {
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!/^application\/json\b/i.test(contentType)) {
-    return fail(415, "UNSUPPORTED_MEDIA_TYPE", "Send the request as application/json.");
-  }
-
-  const body = await readBody(request);
+  const body = await readJsonBody(request);
   if (!body.ok) return body.response;
-
-  let json: unknown;
-  try {
-    json = JSON.parse(body.text);
-  } catch {
-    return fail(400, "INVALID_JSON", "The request body is not valid JSON.");
-  }
+  const json = body.json;
 
   const parsed = recommendRequestSchema.safeParse(json);
   if (!parsed.success) {
@@ -154,17 +85,13 @@ export async function handleRecommendRequest(
   }
   const { cityId, profileId, preferences, explain } = parsed.data;
 
-  let decision: GateDecision | null = null;
-  if (options.getGate !== undefined) {
-    try {
-      decision = await options.getGate()(request);
-    } catch {
-      consoleAirLogger.warn("recommend.rate_limit_gate_failed", { cityId });
-      return fail(500, "INTERNAL_ERROR", "The recommendation service hit an unexpected problem.");
-    }
-    if (decision.kind === "limited") return rateLimitedResponse(decision);
-  }
-  const degraded = decision?.kind === "degraded";
+  const gate = await applyRateLimit(request, options.getGate, {
+    event: "recommend.rate_limit_gate_failed",
+    cityId,
+    response: () => fail(500, "INTERNAL_ERROR", "The recommendation service hit an unexpected problem."),
+  });
+  if (gate.kind === "blocked") return gate.response;
+  const { degraded } = gate;
 
   let result: RecommendationResult;
   let air: NormalizedAirData;
@@ -174,12 +101,12 @@ export async function handleRecommendRequest(
     freshness = air.freshnessStatus;
     const outcome = generateRecommendations({ air, profileId, preferences, nowMs: now() });
     if (!outcome.ok) {
-      consoleAirLogger.warn("recommend.engine_rejected_validated_input", { cityId });
+      consoleSafeLogger.warn("recommend.engine_rejected_validated_input", { cityId });
       return fail(500, "INTERNAL_ERROR", "The recommendation service hit an unexpected problem.");
     }
     result = outcome.result;
   } catch {
-    consoleAirLogger.warn("recommend.failed", { cityId });
+    consoleSafeLogger.warn("recommend.failed", { cityId });
     return fail(500, "INTERNAL_ERROR", "The recommendation service hit an unexpected problem.");
   }
 
@@ -197,7 +124,7 @@ export async function handleRecommendRequest(
 
   if (result.status === "air-data-unavailable") {
     const code: RecommendApiErrorCode = degraded ? "RATE_LIMITING_UNAVAILABLE" : "AIR_DATA_UNAVAILABLE";
-    const retryAfter = degraded ? 30 : 60;
+    const retryAfter = unavailableRetryAfterSeconds(degraded);
     const errorBody: RecommendApiError = {
       ok: false,
       error: {

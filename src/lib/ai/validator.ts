@@ -151,6 +151,15 @@ const MISSING_POLLUTANT = /\b(?:nh3|ammonia|pb)\b/i;
 
 const KEY_SHAPE = /AIza[0-9A-Za-z_-]{20,}/;
 
+/**
+ * A figure written so that `\d` cannot see it: a digit from another script (fullwidth, Devanagari, Arabic-Indic...),
+ * or a number spelled out from ten upwards. The reply is English and the app shows every figure itself, so neither
+ * has a legitimate use, and either would let an invented AQI or concentration past the numeric grounding below.
+ * (One to nine stay allowed in words, as small integers already are in digits.)
+ */
+const FOREIGN_DIGIT = /(?![0-9])\p{Nd}/u;
+const SPELLED_FIGURE = /\b(?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|lakhs?|crores?|millions?|billions?)\b/i;
+
 /* --------------------------------------------------------------- numbers */
 
 /** A clock time. A trailing colon or full stop is punctuation ("at 17:00: a drop"), not part of the time. */
@@ -318,11 +327,35 @@ function ungroundedNumber(text: string, ctx: NumericContext): RejectionReason | 
 
 /* ------------------------------------------------------- per-string checks */
 
-const numericContextOf = (contextJson: string): NumericContext => ({
-  quantities: groundedQuantities(contextJson),
-  times: timesIn(contextJson),
-  allValues: groundedNumbers(contextJson),
-});
+/**
+ * What the context permits, by its exact JSON. Building it parses the 13 KB context and walks every value (about
+ * 300 us, 70% of validating one explanation, measured), and it is a pure function of that string, so the last few
+ * contexts are kept: every request for one city and profile validates against the same context, whether it is
+ * checking a cached explanation or a new answer, and a chat answer for it. Bounded (least recently used) and
+ * shallowly frozen; nothing here mutates it.
+ */
+const NUMERIC_CONTEXT_CACHE_SIZE = 8;
+const numericContexts = new Map<string, NumericContext>();
+
+const numericContextOf = (contextJson: string): NumericContext => {
+  const known = numericContexts.get(contextJson);
+  if (known !== undefined) {
+    numericContexts.delete(contextJson); // most recently used goes last
+    numericContexts.set(contextJson, known);
+    return known;
+  }
+  const built: NumericContext = Object.freeze({
+    quantities: groundedQuantities(contextJson),
+    times: timesIn(contextJson),
+    allValues: groundedNumbers(contextJson),
+  });
+  numericContexts.set(contextJson, built);
+  if (numericContexts.size > NUMERIC_CONTEXT_CACHE_SIZE) {
+    const oldest = numericContexts.keys().next();
+    if (!oldest.done) numericContexts.delete(oldest.value);
+  }
+  return built;
+};
 
 const secretsOf = (options: ValidationOptions): string[] => (options.secrets ?? []).filter((s) => s.length >= 8);
 
@@ -331,13 +364,16 @@ const secretsOf = (options: ValidationOptions): string[] => (options.secrets ?? 
  * ungrounded numbers and times, and the medical, health-outcome, guarantee, safety, indoor-measurement,
  * official-reading and missing-pollutant claims. Returns the first rule broken, or null.
  */
-function checkText(text: string, allowed: ReadonlySet<string>, numeric: NumericContext, secrets: readonly string[]): RejectionReason | null {
+function checkText(raw: string, allowed: ReadonlySet<string>, numeric: NumericContext, secrets: readonly string[]): RejectionReason | null {
+  // Compatibility forms (fullwidth letters and digits, superscripts, CO₂) are judged as the plain characters they stand for.
+  const text = raw.normalize("NFKC");
   for (const m of text.matchAll(/\b(?:ROUTINE|INDOOR|TRANSPORT|EXP)_[A-Za-z0-9_-]+/g)) {
     if (!allowed.has(m[0])) return "invented-id-in-text";
   }
   if (CONTROL.test(text)) return "control-characters";
   if (MARKUP.some((re) => re.test(text))) return "markup-or-link";
-  if (KEY_SHAPE.test(text) || secrets.some((s) => text.includes(s))) return "credential-leak";
+  if (KEY_SHAPE.test(text) || secrets.some((s) => raw.includes(s) || text.includes(s))) return "credential-leak";
+  if (FOREIGN_DIGIT.test(text) || SPELLED_FIGURE.test(text)) return "unsupported-number";
 
   const number = ungroundedNumber(text, numeric);
   if (number !== null) return number;

@@ -29,7 +29,8 @@ export interface ChatTurn {
   readonly text: string;
 }
 
-export type ChatStatus = "generated" | "fallback" | "unavailable";
+export const CHAT_STATUSES = ["generated", "fallback", "unavailable"] as const;
+export type ChatStatus = (typeof CHAT_STATUSES)[number];
 
 export interface ChatEnvelope {
   readonly status: ChatStatus;

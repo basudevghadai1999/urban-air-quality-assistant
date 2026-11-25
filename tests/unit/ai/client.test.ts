@@ -86,3 +86,22 @@ describe("Gemini SDK transport", () => {
     await expect(createGeminiTransport("k").generate(request)).rejects.toBe(boom);
   });
 });
+
+describe("Gemini cancellation", () => {
+  it("passes the caller's signal to the SDK together with the timeout guard, and the SDK call aborts when either fires", async () => {
+    generateContent.mockResolvedValue({ text: "{}", candidates: [{ finishReason: "STOP" }] });
+    const caller = new AbortController();
+    await createGeminiTransport("FAKE-sdk-key-0123456789").generate({ ...request, signal: caller.signal });
+    const signal = (generateContent.mock.calls[0]?.[0] as { config: { abortSignal: AbortSignal } }).config.abortSignal;
+    expect(signal.aborted).toBe(false);
+    caller.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("without a caller signal only the timeout guard is passed, and a disconnected caller aborts nothing shared", async () => {
+    generateContent.mockResolvedValue({ text: "{}", candidates: [{ finishReason: "STOP" }] });
+    await createGeminiTransport("FAKE-sdk-key-0123456789").generate(request);
+    const signal = (generateContent.mock.calls[0]?.[0] as { config: { abortSignal: AbortSignal } }).config.abortSignal;
+    expect(signal.aborted).toBe(false);
+  });
+});
